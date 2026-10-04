@@ -24,7 +24,7 @@ namespace solid
 		Stats g_stats{};
 		int g_epoch = -1;
 		bool g_resetPending = false;
-		bool g_enabled = false;
+		bool g_enabled = true;
 
 		long long key(int x, int y, int z)
 		{

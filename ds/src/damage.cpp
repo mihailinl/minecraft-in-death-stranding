@@ -71,7 +71,7 @@ namespace damage
 		}
 
 		bool g_checked = false, g_codeOk = false, g_broken = false;
-		bool g_hurtNpcs = false, g_hurtSam = false, g_humansOff = false;
+		bool g_hurtNpcs = true, g_hurtSam = true, g_humansOff = false;
 		char g_status[320] = "attack table not read yet";
 		Stats g_stats{};
 

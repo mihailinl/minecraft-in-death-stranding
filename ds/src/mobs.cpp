@@ -23,7 +23,7 @@ namespace mobs
 		constexpr double kSwingDamage = 4.0;      // a zombie has 20
 		constexpr ULONGLONG kMobStaleMs = 3000;   // a mob not in a "mobs" report this long is gone
 
-		bool g_enabled = false;
+		bool g_enabled = true;
 		bool g_active = false; // peds are being sent
 		ULONGLONG g_nextPeds = 0;
 		int g_nextHandle = 1;

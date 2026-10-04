@@ -7,6 +7,7 @@ import dev.rehan.passthrough.client.mixin.MouseHandlerAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.input.MouseButtonInfo;
 
 /**
@@ -22,6 +23,15 @@ final class GuiInput {
 	private static double gx, gy;
 
 	private GuiInput() {
+	}
+
+	/** The host's button numbers (0 left, 1 right, 2 middle) -> Minecraft 26.x's, which are SDL3's (left 1, middle 2, right 3). */
+	private static int sdlButton(final int host) {
+		return switch (host) {
+			case 1 -> InputConstants.MOUSE_BUTTON_RIGHT;
+			case 2 -> InputConstants.MOUSE_BUTTON_MIDDLE;
+			default -> InputConstants.MOUSE_BUTTON_LEFT;
+		};
 	}
 
 	static void handle(final Minecraft minecraft, final JsonObject m) {
@@ -40,7 +50,7 @@ final class GuiInput {
 				if (screen != null) {
 					screen.mouseMoved(gx, gy);
 					if (held >= 0) {
-						screen.mouseDragged(new MouseButtonEvent(gx, gy, new MouseButtonInfo(held, 0)), dx, dy);
+						screen.mouseDragged(new MouseButtonEvent(gx, gy, new MouseButtonInfo(sdlButton(held), 0)), dx, dy);
 					}
 				}
 			}
@@ -50,7 +60,7 @@ final class GuiInput {
 				boolean handled = false;
 				if (screen != null) {
 					// as MouseHandler.onButton does: the event at the cursor, then afterMouseAction
-					MouseButtonEvent event = new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, 0));
+					MouseButtonEvent event = new MouseButtonEvent(gx, gy, new MouseButtonInfo(sdlButton(b), 0));
 					handled = down ? screen.mouseClicked(event, false) : screen.mouseReleased(event);
 					screen.afterMouseAction();
 				}

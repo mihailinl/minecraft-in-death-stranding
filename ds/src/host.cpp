@@ -47,6 +47,9 @@ namespace host
 		unsigned long long g_frame = 0;
 		Aim g_aim{};
 		std::atomic<bool> g_invOpen{false};
+		ULONGLONG g_syncAt = 0;          // when to ask Minecraft for the solid blocks around (blocksync)
+		double g_syncCentre[3] = {0, 0, 0};
+		bool g_synced = false;
 		std::atomic<float> g_cursorX{0.5f}, g_cursorY{0.5f};
 		std::atomic<bool> g_cursorDirty{false};
 		std::atomic<int> g_bbWidth{2560}, g_bbHeight{1440};
@@ -474,9 +477,28 @@ namespace host
 			g_ws.send("{\"t\":\"clear\"}");
 			++g_epoch;
 			solid::reset();
-			// the player's blocks around here, so their boxes are (re)made at the new level
-			g_ws.send("{\"t\":\"blocksync\",\"r\":64}");
+			// the player's blocks around here, so their boxes are (re)made at the new level: asked a few seconds
+			// later, once Minecraft's player stands here and the chunks around are loaded
+			g_syncAt = GetTickCount64() + 3000;
 			logf("level: Sam at z %.3f, yOffset %.3f", ground, g_yOffset);
+		}
+
+		// existing Minecraft blocks near Sam -> their boxes in DS (solid.cpp): after a re-level, and again whenever Sam
+		// has walked 40 m from where it was last asked
+		{
+			const double dx = s.sam.pos[0] - g_syncCentre[0], dy = s.sam.pos[1] - g_syncCentre[1];
+			if (g_synced && dx * dx + dy * dy > 40.0 * 40.0 && g_syncAt == 0)
+				g_syncAt = GetTickCount64();
+			if (g_syncAt != 0 && GetTickCount64() >= g_syncAt)
+			{
+				g_ws.send("{\"t\":\"blocksync\",\"r\":64}");
+				g_syncCentre[0] = s.sam.pos[0];
+				g_syncCentre[1] = s.sam.pos[1];
+				g_syncCentre[2] = s.sam.pos[2];
+				g_synced = true;
+				g_syncAt = 0;
+				logf("blocksync around Sam %.1f %.1f", s.sam.pos[0], s.sam.pos[1]);
+			}
 		}
 
 		const McPose cam = camera_pose(s.cam, g_yOffset);
