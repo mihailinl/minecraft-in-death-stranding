@@ -227,8 +227,12 @@ namespace mobs
 				dir[0] = float(v[0] / l), dir[1] = float(v[1] / l), dir[2] = 0.0f;
 		}
 		const double body[3] = {feet[0], feet[1], feet[2] + 1.2};
-		if (damage::hit_human(human->second, body, dir, false))
+		// an iron golem flings its target, and hits as hard as two ordinary blows
+		const bool golem = m.find("\"k\":\"iron_golem\"") != std::string::npos;
+		if (damage::hit_human(human->second, body, dir, false, golem ? 2 : 1))
 			++g_stats.mob_hits;
+		if (golem)
+			damage::toss_human(human->second, body, dir);
 		if (has_mob && mob >= 0)
 		{
 			// only now does this human fight back, and only this mob

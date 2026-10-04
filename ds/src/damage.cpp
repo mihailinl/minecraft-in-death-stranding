@@ -83,6 +83,9 @@ namespace damage
 		uint16_t g_humanFinisher = 0; // the non-lethal attack with the most ConsciousDamage
 		uint16_t g_humanMelee = 0;    // a sword: the player's own punch when it is non-lethal
 		uint16_t g_humanLight = 0;    // a Minecraft mob's blow: the non-lethal attack with the least ConsciousDamage
+		uint16_t g_toss = 0;          // an iron golem's fling: a harmless shove (blast wave / push: no damage, no consciousness)
+		constexpr float kTossImpulse = 12.0f;   // impulse scale of the fling (MsgDamage +0x20)
+		constexpr float kTossSeverity = 1.0f;   // impact severity of the fling (MsgDamage +0x24; the game passes -1 = from the attack)
 		constexpr int kMobHitsToKnockOut = 6; // mob blows until a human goes down (the last one is the finisher)
 		constexpr ULONGLONG kMobHitMemoryMs = 30000;
 		constexpr int kBtPosts = 3;       // posts of g_btStrong per hit on a BT
@@ -300,6 +303,8 @@ namespace damage
 			g_humanMelee = choose_best("human melee (non-lethal)", punches, nonlethal, [](const Param &p) { return p.conscious; });
 			if (g_humanMelee == 0)
 				g_humanMelee = g_humanArrow;
+			const uint16_t toss[] = {351, 350};
+			g_toss = choose("iron golem fling (harmless)", toss, [](const Param &p) { return p.damage == 0.0f && p.conscious == 0.0f; });
 			const uint16_t light[] = {378, 379, 62, 63, 64, 65, 67, 68, 69, 279, 280};
 			g_humanLight = choose_best("human light (mob blow)", light, nonlethal, [](const Param &p) { return -p.conscious; });
 			if (g_humanLight == 0)
@@ -316,7 +321,7 @@ namespace damage
 		}
 
 		// ---- posting a hit, the game's way (0x142992e7c..ef2) ----
-		bool post_raw(void *victim, const Hit *hit, uint16_t attack, void *instigator, const float *impulse, float scale)
+		bool post_raw(void *victim, const Hit *hit, uint16_t attack, void *instigator, const float *impulse, float scale, float severity = -1.0f)
 		{
 			__try
 			{
@@ -333,7 +338,7 @@ namespace damage
 				}
 				alignas(16) uint8_t msg[0xB0] = {};
 				fn<FnMsgCtor>(kMsgDamageCtor)(msg, *reinterpret_cast<void **>(static_cast<char *>(ctx) + 0xE8),
-					reinterpret_cast<const void *>(g_base + kDefaultDamageType), 0.0f, impulse, scale, -1.0f, -1);
+					reinterpret_cast<const void *>(g_base + kDefaultDamageType), 0.0f, impulse, scale, severity, -1);
 				fn<FnMsgFromHit>(kMsgFromHit)(msg, hit);
 				fn<FnPost>(kPostDamage)(victim, msg);
 				fn<FnRelease>(kLinkRelease)(msg + 0x28);
@@ -1015,7 +1020,7 @@ namespace damage
 		return true;
 	}
 
-	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion)
+	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion, int blows)
 	{
 		if (!ready() || g_humansOff || classify_raw(entity) != Kind::Human)
 			return false;
@@ -1032,7 +1037,8 @@ namespace damage
 		if (now - mc.last > kMobHitMemoryMs)
 			mc.blows = 0;
 		mc.last = now;
-		const bool finish = ++mc.blows >= kMobHitsToKnockOut && g_humanFinisher != 0;
+		mc.blows += std::max(1, blows);
+		const bool finish = mc.blows >= kMobHitsToKnockOut && g_humanFinisher != 0;
 		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, Source::Melee, nullptr, finish ? g_humanFinisher : g_humanLight,
 			finish ? kFinisherPosts : 1);
 		if (finish)
@@ -1042,6 +1048,28 @@ namespace damage
 		}
 		logf("mob blow %d/%d on human %p%s", finish ? kMobHitsToKnockOut : mc.blows, kMobHitsToKnockOut, entity, finish ? ": knocked out" : "");
 		return g_stats.knocked_out != before;
+	}
+
+	bool toss_human(void *entity, const double at[3], const float dir[3])
+	{
+		if (!ready() || g_humansOff || g_toss == 0 || classify_raw(entity) != Kind::Human)
+			return false;
+		// up and away from the golem, like Minecraft's iron golem throws its target
+		float imp[4] = {dir[0] * 0.45f, dir[1] * 0.45f, 1.0f, 0.0f};
+		const float l = std::sqrt(imp[0] * imp[0] + imp[1] * imp[1] + imp[2] * imp[2]);
+		for (int k = 0; k < 3; ++k)
+			imp[k] /= l;
+		Hit h{};
+		h.pos = {at[0], at[1], at[2]};
+		h.nrm[0] = -imp[0];
+		h.nrm[1] = -imp[1];
+		h.nrm[2] = -imp[2];
+		alignas(16) float impulse[4] = {imp[0], imp[1], imp[2], 0.0f};
+		if (!post_raw(entity, &h, g_toss, nullptr, impulse, kTossImpulse, kTossSeverity))
+			return false;
+		remember(entity, Kind::Human);
+		logf("TOSS human %p with attack %u (impulse x%.1f)", entity, g_toss, kTossImpulse);
+		return true;
 	}
 
 	Stats stats()

@@ -30,6 +30,7 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.GoalSelector;
+import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.player.Player;
@@ -74,8 +75,12 @@ public final class MobWar {
 		return e instanceof Villager && (e.isInvisible() || e.entityTags().contains(PROXY_TAG));
 	}
 
-	/** Mobs that join the fight: hostile, goal-driven ones. */
+	/** Mobs that join the fight: hostile, goal-driven ones, and iron golems (they fling the host's people). */
 	private static boolean fighter(final Entity e) {
+		if (e instanceof IronGolem) {
+			return true;
+		}
+
 		return e instanceof Mob && e instanceof Enemy && !isProxy(e) && !BRAIN_MOBS.contains(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath());
 	}
 

@@ -33,7 +33,9 @@ namespace damage
 	bool entity_feet(void *entity, double out[3]);
 	/// A non-lethal hit on a DS human: the human arrow attack ID (`explosion`: the TNT one). The death watch applies:
 	/// false when humans are switched off, the entity isn't a living human, or the engine refused.
-	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion);
+	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion, int blows = 1);
+	/// An iron golem's fling: a harmless shove up and away along `dir` (no damage, no consciousness), flashes red.
+	bool toss_human(void *entity, const double at[3], const float dir[3]);
 
 	struct Stats
 	{
