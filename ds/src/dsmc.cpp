@@ -15,6 +15,7 @@
 #include "physground.h"
 #include "solid.h"
 #include "damage.h"
+#include "mobs.h"
 #include "watch.h"
 #include "log.h"
 #include "rawinput.h"
@@ -232,6 +233,7 @@ namespace
 		physground::frame(g_snap);
 		solid::frame(g_snap);
 		damage::frame(g_snap);
+		mobs::frame(g_snap);
 		ground::on_present(runtime);
 		watch::poll();
 
@@ -366,6 +368,12 @@ namespace
 		ImGui::Text("arrow hits %d  TNT hits %d  knocked out %d  died %d  Sam hits %d  burns %d", ds.arrow_hits, ds.tnt_hits, ds.knocked_out,
 			ds.killed, ds.sam_hits, ds.burns);
 		ImGui::TextWrapped("%s", damage::status());
+		bool mobwar = mobs::enabled();
+		if (ImGui::Checkbox("Minecraft mobs fight DS humans", &mobwar))
+			mobs::set_enabled(mobwar);
+		const mobs::Stats ms = mobs::stats();
+		ImGui::SameLine();
+		ImGui::Text("humans tracked %d  mob hits %d  creeper hits %d  hit back %d", ms.humans, ms.mob_hits, ms.explosion_hits, ms.retaliations);
 		ImGui::TextUnformatted(g_physStatus);
 		ImGui::SameLine();
 		if (ImGui::Button("Physics probe (F10)"))

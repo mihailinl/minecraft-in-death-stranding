@@ -38,8 +38,8 @@ import net.minecraft.world.entity.projectile.Projectile;
 /**
  * Minecraft's mobs vs the host's people. The host lists its people ("peds"); each gets an invisible, AI-less
  * villager "proxy" here that follows it and that hostile mobs hunt. A mob's hit on a proxy goes back to the host
- * ("mobhit"), which hurts the real person. The other way round, the host keeps a stand-in for every mob ("mobs") that
- * its police shoot at, and sends the damage back ("mobdmg").
+ * ("mobhit", with the attacker's entity id), which hurts the real person. The other way round, the host keeps a
+ * stand-in for every mob ("mobs") that its people fight, and sends the damage back ("mobdmg").
  */
 public final class MobWar {
 	public static final String PROXY_TAG = "gta_proxy";
@@ -124,9 +124,10 @@ public final class MobWar {
 			return;
 		}
 
+		// "id": the attacking mob's entity id, so the person it hit can fight that mob back ("mobdmg")
 		String kind = BuiltInRegistries.ENTITY_TYPE.getKey(attacker.getType()).getPath();
-		Passthrough.events.accept(String.format(Locale.ROOT, "{\"t\":\"mobhit\",\"h\":%d,\"d\":%.2f,\"from\":[%.3f,%.3f,%.3f],\"k\":\"%s\"}",
-			handle, amount, attacker.getX(), attacker.getY(), attacker.getZ(), kind));
+		Passthrough.events.accept(String.format(Locale.ROOT, "{\"t\":\"mobhit\",\"h\":%d,\"id\":%d,\"d\":%.2f,\"from\":[%.3f,%.3f,%.3f],\"k\":\"%s\"}",
+			handle, attacker.getId(), amount, attacker.getX(), attacker.getY(), attacker.getZ(), kind));
 	}
 
 	/** Every server tick (server thread). */

@@ -23,6 +23,17 @@ namespace damage
 	void set_hurt_sam(bool on);
 	bool hurt_sam();
 
+	// ---- for mobs.cpp: the same engine calls and the same safety rules ----
+	/// Engine code matches the analysed build and the attack table is read.
+	bool engine_ready();
+	/// Alive, standing DS humans (MULEs, Demens; dead and knocked-down ones left out) within `radius` m of a DS point.
+	int humans_near(const double centre[3], float radius, void **out, int max_out);
+	/// DS world position of an entity's feet (Entity::Orientation), SEH-guarded.
+	bool entity_feet(void *entity, double out[3]);
+	/// A non-lethal hit on a DS human: the human arrow attack ID (`explosion`: the TNT one). The death watch applies:
+	/// false when humans are switched off, the entity isn't a living human, or the engine refused.
+	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion);
+
 	struct Stats
 	{
 		int arrow_hits, tnt_hits, sam_hits, burns, knocked_out, killed;

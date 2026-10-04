@@ -4,6 +4,7 @@
 #include "physground.h"
 #include "solid.h"
 #include "damage.h"
+#include "mobs.h"
 #include "log.h"
 #include "ws.h"
 #include <windows.h>
@@ -220,6 +221,16 @@ namespace host
 					damage::on_hot(m);
 					continue;
 				}
+				if (m.find("\"t\":\"mobhit\"") != std::string::npos)
+				{
+					mobs::on_mobhit(m);
+					continue;
+				}
+				if (m.find("\"t\":\"mobs\"") != std::string::npos)
+				{
+					mobs::on_mobs(m);
+					continue;
+				}
 				if (m.find("\"t\":\"explosion\"") != std::string::npos)
 				{
 					double pos[3];
@@ -231,6 +242,7 @@ namespace host
 						if (rat != std::string::npos)
 							r = float(std::atof(m.c_str() + rat + 4));
 						damage::on_explosion(pos[0], pos[1], pos[2], r);
+						mobs::on_explosion(m, pos, r);
 						logf("link <- explosion at %.1f %.1f %.1f r %.1f", pos[0], pos[1], pos[2], r);
 					}
 					continue;
