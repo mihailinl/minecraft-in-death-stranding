@@ -48,6 +48,7 @@ namespace host
 		Aim g_aim{};
 		std::atomic<bool> g_invOpen{false};
 		ULONGLONG g_syncAt = 0;          // when to ask Minecraft for the solid blocks around (blocksync)
+		int g_syncRetries = 0;           // further asks after a re-level: Minecraft's player and chunks arrive late
 		double g_syncCentre[3] = {0, 0, 0};
 		bool g_synced = false;
 		std::atomic<float> g_cursorX{0.5f}, g_cursorY{0.5f};
@@ -210,6 +211,9 @@ namespace host
 				if (m.find("\"t\":\"blocks\"") != std::string::npos)
 				{
 					// Minecraft's solid blocks (barriers excluded): Sam collides with them in DS
+					static int logged_blocks = 0;
+					if (logged_blocks++ < 20)
+						logf("link <- blocks (%zu bytes)", m.size());
 					parse_triples(m, "\"set\":[", solid::block_set);
 					parse_triples(m, "\"clear\":[", solid::block_clear);
 					continue;
@@ -480,6 +484,7 @@ namespace host
 			// the player's blocks around here, so their boxes are (re)made at the new level: asked a few seconds
 			// later, once Minecraft's player stands here and the chunks around are loaded
 			g_syncAt = GetTickCount64() + 3000;
+			g_syncRetries = 3;
 			logf("level: Sam at z %.3f, yOffset %.3f", ground, g_yOffset);
 		}
 
@@ -496,7 +501,10 @@ namespace host
 				g_syncCentre[1] = s.sam.pos[1];
 				g_syncCentre[2] = s.sam.pos[2];
 				g_synced = true;
-				g_syncAt = 0;
+				// right after a re-level Minecraft's player has only just been moved here and its chunks may not be
+				// loaded yet: ask again a few times (boxes already made are kept, the answer only adds)
+				static const ULONGLONG kRetryMs[] = {0, 15000, 7000, 4000};
+				g_syncAt = g_syncRetries > 0 ? GetTickCount64() + kRetryMs[g_syncRetries--] : 0;
 				logf("blocksync around Sam %.1f %.1f", s.sam.pos[0], s.sam.pos[1]);
 			}
 		}
