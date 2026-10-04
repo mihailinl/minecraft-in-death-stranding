@@ -82,6 +82,9 @@ namespace damage
 		uint16_t g_btStrong = 0;      // the bloodiest BT attack (blood grenade blast)
 		uint16_t g_humanFinisher = 0; // the non-lethal attack with the most ConsciousDamage
 		uint16_t g_humanMelee = 0;    // a sword: the player's own punch when it is non-lethal
+		uint16_t g_humanLight = 0;    // a Minecraft mob's blow: the non-lethal attack with the least ConsciousDamage
+		constexpr int kMobHitsToKnockOut = 6; // mob blows until a human goes down (the last one is the finisher)
+		constexpr ULONGLONG kMobHitMemoryMs = 30000;
 		constexpr int kBtPosts = 3;       // posts of g_btStrong per hit on a BT
 		constexpr int kFinisherPosts = 6; // posts of g_humanFinisher on a human's second hit
 		constexpr ULONGLONG kHitMemoryMs = 20000; // a human's hit count resets after this long unhit
@@ -241,6 +244,10 @@ namespace damage
 			g_humanMelee = choose_best("human melee (non-lethal)", punches, nonlethal, [](const Param &p) { return p.conscious; });
 			if (g_humanMelee == 0)
 				g_humanMelee = g_humanArrow;
+			const uint16_t light[] = {378, 379, 62, 63, 64, 65, 67, 68, 69, 279, 280};
+			g_humanLight = choose_best("human light (mob blow)", light, nonlethal, [](const Param &p) { return -p.conscious; });
+			if (g_humanLight == 0)
+				g_humanLight = g_humanMelee;
 			g_btStrong = choose_best("BT strong", bt_strong, bloody, [](const Param &p) { return p.blood; });
 			if (g_btStrong == 0)
 				g_btStrong = g_btArrow;
@@ -409,6 +416,12 @@ namespace damage
 		};
 		std::unordered_map<void *, HitCount> g_hitCounts;
 		std::unordered_map<void *, ULONGLONG> g_finished; // humans knocked out by our 2nd hit: left alone for a minute
+		struct MobCount
+		{
+			int blows;
+			ULONGLONG last;
+		};
+		std::unordered_map<void *, MobCount> g_mobHits;
 		bool recently_finished(void *e)
 		{
 			const auto it = g_finished.find(e);
@@ -424,11 +437,18 @@ namespace damage
 			g_recent[g_recentNext++ % 8] = {victim, kind == Kind::BT, GetTickCount64()};
 		}
 
-		void hurt(void *victim, Kind kind, const WorldPosition &at, const float dir[3], Source src, void *sam)
+		/// `force_id`: this attack `force_posts` times instead of the arrow/sword/TNT two-hit rule (mob blows).
+		void hurt(void *victim, Kind kind, const WorldPosition &at, const float dir[3], Source src, void *sam, uint16_t force_id = 0,
+			int force_posts = 1)
 		{
 			uint16_t id = 0;
 			int posts = 1, nth = 0;
-			if (kind == Kind::Human && !g_humansOff)
+			if (kind == Kind::Human && !g_humansOff && force_id != 0)
+			{
+				id = force_id;
+				posts = force_posts;
+			}
+			else if (kind == Kind::Human && !g_humansOff)
 			{
 				const ULONGLONG now = GetTickCount64();
 				HitCount &hc = g_hitCounts[victim];
@@ -920,7 +940,27 @@ namespace damage
 		if (!ready() || g_humansOff || classify_raw(entity) != Kind::Human)
 			return false;
 		const int before = g_stats.knocked_out;
-		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, explosion ? Source::Tnt : Source::Melee, nullptr); // mob blows count like sword blows
+		if (explosion)
+		{
+			// a creeper: like TNT, the second blast knocks out
+			hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, Source::Tnt, nullptr);
+			return g_stats.knocked_out != before;
+		}
+		// zombies, skeletons, spiders...: light blows, the sixth one knocks out
+		const ULONGLONG now = GetTickCount64();
+		MobCount &mc = g_mobHits[entity];
+		if (now - mc.last > kMobHitMemoryMs)
+			mc.blows = 0;
+		mc.last = now;
+		const bool finish = ++mc.blows >= kMobHitsToKnockOut && g_humanFinisher != 0;
+		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, Source::Melee, nullptr, finish ? g_humanFinisher : g_humanLight,
+			finish ? kFinisherPosts : 1);
+		if (finish)
+		{
+			g_finished[entity] = now;
+			mc.blows = 0;
+		}
+		logf("mob blow %d/%d on human %p%s", finish ? kMobHitsToKnockOut : mc.blows, kMobHitsToKnockOut, entity, finish ? ": knocked out" : "");
 		return g_stats.knocked_out != before;
 	}
 
