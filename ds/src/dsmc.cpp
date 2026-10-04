@@ -9,6 +9,7 @@
 #include <reshade.hpp>
 #include "compositor.h"
 #include "game.h"
+#include "guard.h"
 #include "ground.h"
 #include "host.h"
 #include "physics.h"
@@ -50,6 +51,40 @@ namespace
 	float g_fovFirstPerson = 60.0f;
 	float g_fovWritten = 0.0f, g_fovOriginal = 0.0f;
 	int g_fovSticky = 0, g_fovReset = 0;
+
+	// every feature that calls into the game runs under guard::run: a fault switches that feature off instead of
+	// letting DS's crash handler end the game
+	struct Feature
+	{
+		const char *name;
+		bool broken;
+	};
+	Feature f_rays{"DS collision -> Minecraft ground", false}, f_solid{"Minecraft blocks solid for Sam", false},
+		f_damage{"weapons and damage", false}, f_mobs{"mobs vs DS humans", false}, f_scan{"depth scan", false},
+		f_probe{"physics probe / test box", false};
+	ULONGLONG g_readPausedUntil = 0;
+
+	template <class F>
+	void guarded(Feature &feature, F &&f)
+	{
+		if (!feature.broken && !guard::run(feature.name, f))
+			feature.broken = true;
+	}
+
+	/// The camera read retries after a fault (pointers are briefly stale while the game loads)
+	void read_snapshot()
+	{
+		if (GetTickCount64() < g_readPausedUntil)
+		{
+			g_snap.ok = false;
+			return;
+		}
+		if (!guard::run("camera read", [] { game::read(g_snap); }))
+		{
+			g_snap.ok = false;
+			g_readPausedUntil = GetTickCount64() + 2000;
+		}
+	}
 
 	// physics probe (F10): rays down from Sam's head on three layers
 	char g_physStatus[160] = "physics: not resolved";
@@ -151,7 +186,7 @@ namespace
 
 	void on_begin_effects(effect_runtime *runtime, command_list *, resource_view, resource_view)
 	{
-		game::read(g_snap);
+		read_snapshot();
 		uint32_t w = 0, h = 0;
 		runtime->get_screenshot_width_and_height(&w, &h);
 		const float aspect = h ? float(w) / float(h) : 16.0f / 9.0f;
@@ -254,7 +289,7 @@ namespace
 	void on_finish_effects(effect_runtime *runtime, command_list *cmd_list, resource_view, resource_view)
 	{
 		if (g_resolved)
-			ground::on_finish_effects(runtime, cmd_list, g_snap);
+			guarded(f_scan, [&] { ground::on_finish_effects(runtime, cmd_list, g_snap); });
 	}
 
 	void on_destroy_runtime(effect_runtime *runtime)
@@ -275,15 +310,15 @@ namespace
 			rawinput::install();
 			host::start();
 		}
-		game::read(g_snap); // also when effects are toggled off
+		read_snapshot(); // also when effects are toggled off
 		uint32_t w = 0, h = 0;
 		runtime->get_screenshot_width_and_height(&w, &h);
 		host::frame(g_snap, int(w), int(h));
-		physground::frame(g_snap);
-		solid::frame(g_snap);
-		damage::frame(g_snap);
-		mobs::frame(g_snap);
-		ground::on_present(runtime);
+		guarded(f_rays, [] { physground::frame(g_snap); });
+		guarded(f_solid, [] { solid::frame(g_snap); });
+		guarded(f_damage, [] { damage::frame(g_snap); });
+		guarded(f_mobs, [] { mobs::frame(g_snap); });
+		guarded(f_scan, [&] { ground::on_present(runtime); });
 		watch::poll();
 
 		if (runtime->is_key_pressed(VK_F7))
@@ -318,7 +353,7 @@ namespace
 		if (runtime->is_key_pressed(VK_F8))
 			drop_pin();
 		if (runtime->is_key_pressed(VK_F10))
-			physics_probe();
+			guarded(f_probe, [] { physics_probe(); });
 		// first-person FOV: see whether DS keeps what we write or recomputes it every frame
 		if (host::build_mode() && host::first_person_build() && g_fovOverride && g_snap.ok)
 		{
@@ -361,6 +396,9 @@ namespace
 	void on_overlay(effect_runtime *)
 	{
 		ImGui::TextUnformatted(g_status);
+		for (const Feature *f : {&f_rays, &f_solid, &f_damage, &f_mobs, &f_scan, &f_probe})
+			if (f->broken)
+				ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "'%s' hit a fault and was switched off (see dsmc.log GUARD)", f->name);
 		const host::Stats st = host::stats();
 		ImGui::Text("Minecraft link: %s   passthrough (F7): %s   build mode (F6): %s", host::connected() ? "connected" : "waiting",
 			host::enabled() ? "on" : "off", host::build_mode() ? "ON" : "off");
@@ -405,7 +443,7 @@ namespace
 			ss.spawned, ss.removed, ss.failed);
 		ImGui::SameLine();
 		if (ImGui::Button("Test box"))
-			solid::spawn_test(g_snap);
+			guarded(f_probe, [] { solid::spawn_test(g_snap); });
 		bool npcs = damage::hurt_npcs();
 		if (ImGui::Checkbox("Minecraft weapons hurt DS (humans knocked out, BTs hurt)", &npcs))
 			damage::set_hurt_npcs(npcs);
@@ -426,7 +464,7 @@ namespace
 		ImGui::TextUnformatted(g_physStatus);
 		ImGui::SameLine();
 		if (ImGui::Button("Physics probe (F10)"))
-			physics_probe();
+			guarded(f_probe, [] { physics_probe(); });
 		for (const char *line : g_probeText)
 			if (line[0])
 				ImGui::TextUnformatted(line);
@@ -479,6 +517,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 			_wfopen_s(&g_log, path, L"a");
 		}
 		logf("---- DSMC loaded");
+		guard::install();
 		g_resolved = game::resolve(g_status, sizeof(g_status));
 		logf("resolve: %s", g_status);
 		physics::resolve(g_physStatus, sizeof(g_physStatus));

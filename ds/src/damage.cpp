@@ -26,7 +26,8 @@ namespace damage
 		constexpr uintptr_t kFindComponent = 0x2361990; // EntityComponent *(Entity *, const RTTI *)
 		constexpr uintptr_t kInRadius = 0x367df90;     // (EntArray *, const Entity *centre, float r, bool filter)
 		constexpr uintptr_t kFree = 0x19d5870;
-		constexpr uintptr_t kIsKnockedDown = 0x3732750; // bool(const Humanoid *, bool *out): RTTI-checked, *out = state == 3
+		// (Humanoid::IsKnockedDown is NOT used: it dereferences Humanoid+0x520 before any type check, and the entities with a
+		// MULE component include non-humanoids — that crashed the game. Who is down is tracked from our own hits instead.)
 		constexpr uintptr_t kDefaultDamageType = 0x7bc3b80;
 		constexpr uintptr_t kWeaponSystem = 0x7beb0f8; // +0x60 count, +0x68 DSAttackParameter **
 		constexpr uintptr_t kRttiMule = 0x4c116f0, kRttiDemens = 0x4c1abb0, kRttiGazer = 0x4bf7670, kRttiCatcher = 0x4c00720,
@@ -110,7 +111,7 @@ namespace damage
 				{kMakeAttack, 0x20, 0x405eb9821c9598b4ull}, {kMsgDamageCtor, 0x20, 0x3c9e821ff5e69578ull},
 				{kMsgFromHit, 0x20, 0xf89f27752bbd9c2bull}, {kPostDamage, 0x20, 0xf55d688598186ae0ull},
 				{kLinkRelease, 0x20, 0xd835044f6951be9dull}, {kInRadius, 0x20, 0x918b48b1a9e2bc0dull},
-				{kFindComponent, 0x20, 0x9cbe8a46af3a8a5aull}, {kIsKnockedDown, 0x20, 0x8b2ce86be405765full},
+				{kFindComponent, 0x20, 0x9cbe8a46af3a8a5aull},
 				{kAttackInfo, 0x20, 0x208816c2438c70e1ull},
 				{0x2992e7c, 0x7b, 0x7affc24a4f0df632ull}, // the game's own MsgDamage sequence (the BT hit helper)
 			};
@@ -324,19 +325,6 @@ namespace damage
 			}
 		}
 
-		bool knocked_down_raw(void *e)
-		{
-			__try
-			{
-				bool down = false;
-				using Fn = bool (*)(void *, bool *);
-				return fn<Fn>(kIsKnockedDown)(e, &down) && down;
-			}
-			__except (EXCEPTION_EXECUTE_HANDLER)
-			{
-				return false;
-			}
-		}
 
 		bool feet_raw(void *e, WorldPosition &out)
 		{
@@ -420,6 +408,12 @@ namespace damage
 			ULONGLONG last;
 		};
 		std::unordered_map<void *, HitCount> g_hitCounts;
+		std::unordered_map<void *, ULONGLONG> g_finished; // humans knocked out by our 2nd hit: left alone for a minute
+		bool recently_finished(void *e)
+		{
+			const auto it = g_finished.find(e);
+			return it != g_finished.end() && GetTickCount64() - it->second < 60000;
+		}
 
 		// recent hits, for the red flash (dsmc.cpp)
 		RecentHit g_recent[8];
@@ -444,6 +438,7 @@ namespace damage
 				nth = ++hc.hits;
 				if (nth >= 2 && g_humanFinisher != 0)
 				{
+					g_finished[victim] = now;
 					id = g_humanFinisher; // the second hit: consciousness surely down to zero
 					posts = kFinisherPosts;
 					++g_stats.finishers;
@@ -657,6 +652,8 @@ namespace damage
 			post_followups();
 		for (auto it = g_hitCounts.begin(); it != g_hitCounts.end();)
 			it = GetTickCount64() - it->second.last > kHitMemoryMs ? g_hitCounts.erase(it) : std::next(it);
+		for (auto it = g_finished.begin(); it != g_finished.end();)
+			it = GetTickCount64() - it->second > 60000 ? g_finished.erase(it) : std::next(it);
 
 		// sword swings: what is right in front of Sam
 		for (; g_meleeRequests > 0; --g_meleeRequests)
@@ -902,7 +899,7 @@ namespace damage
 		const int n = in_radius_raw(&c, radius, found, 128);
 		int k = 0;
 		for (int i = 0; i < n && k < max_out; ++i)
-			if (classify_raw(found[i]) == Kind::Human && !knocked_down_raw(found[i]))
+			if (classify_raw(found[i]) == Kind::Human && !recently_finished(found[i]))
 				out[k++] = found[i];
 		return k;
 	}
