@@ -25,6 +25,7 @@ namespace damage
 		constexpr uintptr_t kFindComponent = 0x2361990; // EntityComponent *(Entity *, const RTTI *)
 		constexpr uintptr_t kInRadius = 0x367df90;     // (EntArray *, const Entity *centre, float r, bool filter)
 		constexpr uintptr_t kFree = 0x19d5870;
+		constexpr uintptr_t kIsKnockedDown = 0x3732750; // bool(const Humanoid *, bool *out): RTTI-checked, *out = state == 3
 		constexpr uintptr_t kDefaultDamageType = 0x7bc3b80;
 		constexpr uintptr_t kWeaponSystem = 0x7beb0f8; // +0x60 count, +0x68 DSAttackParameter **
 		constexpr uintptr_t kRttiMule = 0x4c116f0, kRttiDemens = 0x4c1abb0, kRttiGazer = 0x4bf7670, kRttiCatcher = 0x4c00720,
@@ -99,7 +100,7 @@ namespace damage
 				{kMakeAttack, 0x20, 0x405eb9821c9598b4ull}, {kMsgDamageCtor, 0x20, 0x3c9e821ff5e69578ull},
 				{kMsgFromHit, 0x20, 0xf89f27752bbd9c2bull}, {kPostDamage, 0x20, 0xf55d688598186ae0ull},
 				{kLinkRelease, 0x20, 0xd835044f6951be9dull}, {kInRadius, 0x20, 0x918b48b1a9e2bc0dull},
-				{kFindComponent, 0x20, 0x9cbe8a46af3a8a5aull},
+				{kFindComponent, 0x20, 0x9cbe8a46af3a8a5aull}, {kIsKnockedDown, 0x20, 0x8b2ce86be405765full},
 				{0x2992e7c, 0x7b, 0x7affc24a4f0df632ull}, // the game's own MsgDamage sequence (the BT hit helper)
 			};
 			g_codeOk = true;
@@ -266,6 +267,33 @@ namespace damage
 			__try
 			{
 				return (*reinterpret_cast<const uint64_t *>(static_cast<char *>(e) + 0x88) & 0x80) != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool knocked_down_raw(void *e)
+		{
+			__try
+			{
+				bool down = false;
+				using Fn = bool (*)(void *, bool *);
+				return fn<Fn>(kIsKnockedDown)(e, &down) && down;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool feet_raw(void *e, WorldPosition &out)
+		{
+			__try
+			{
+				out = *reinterpret_cast<const WorldPosition *>(static_cast<char *>(e) + 0xC8);
+				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -602,6 +630,45 @@ namespace damage
 	bool hurt_sam()
 	{
 		return g_hurtSam;
+	}
+
+	bool engine_ready()
+	{
+		return ready();
+	}
+
+	int humans_near(const double centre[3], float radius, void **out, int max_out)
+	{
+		if (!ready())
+			return 0;
+		const WorldPosition c = {centre[0], centre[1], centre[2]};
+		void *found[128];
+		const int n = in_radius_raw(&c, radius, found, 128);
+		int k = 0;
+		for (int i = 0; i < n && k < max_out; ++i)
+			if (classify_raw(found[i]) == Kind::Human && !knocked_down_raw(found[i]))
+				out[k++] = found[i];
+		return k;
+	}
+
+	bool entity_feet(void *entity, double out[3])
+	{
+		WorldPosition p{};
+		if (entity == nullptr || !feet_raw(entity, p))
+			return false;
+		out[0] = p.x;
+		out[1] = p.y;
+		out[2] = p.z;
+		return true;
+	}
+
+	bool hit_human(void *entity, const double at[3], const float dir[3], bool explosion)
+	{
+		if (!ready() || g_humansOff || classify_raw(entity) != Kind::Human)
+			return false;
+		const int before = g_stats.knocked_out;
+		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, explosion, nullptr);
+		return g_stats.knocked_out != before;
 	}
 
 	Stats stats()
