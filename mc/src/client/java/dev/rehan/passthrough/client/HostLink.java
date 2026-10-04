@@ -70,6 +70,7 @@ public final class HostLink extends WebSocketServer {
 				case "ground" -> WorldBridge.solid(ints(m.getAsJsonArray("c")));
 				case "clear" -> WorldBridge.clearSolid();
 				case "save" -> WorldBridge.save();
+				case "samfire" -> dev.rehan.passthrough.SamFire.set(m.get("on").getAsBoolean());
 				case "cmd" -> WorldBridge.command(m.get("c").getAsString());
 				case "gta", "gtastate", "gtainfo", "director" -> this.relay(conn, message);
 				case "blocksync" -> WorldBridge.sync(m.has("r") ? m.get("r").getAsInt() : 48);

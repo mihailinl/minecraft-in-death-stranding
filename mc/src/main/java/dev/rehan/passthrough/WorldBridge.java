@@ -124,6 +124,7 @@ public final class WorldBridge {
 	/** Every server tick: block changes, and projectiles in flight for the host to trace through its own world. */
 	static void tick(final MinecraftServer s) {
 		flush(s);
+		SamFire.tick(s);
 		if (Passthrough.active) {
 			reportProjectiles(s.overworld());
 		}

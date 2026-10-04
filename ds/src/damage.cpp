@@ -188,6 +188,60 @@ namespace damage
 			return best;
 		}
 
+		/// The weakest attack in the whole table that hurts (health or blood) without knocking Sam about (reaction none or
+		/// flinch): a burn tick.
+		bool param_at_raw(int i, Param &out)
+		{
+			__try
+			{
+				const char *ws = *reinterpret_cast<char *const *>(g_base + kWeaponSystem);
+				if (ws == nullptr)
+					return false;
+				const int n = *reinterpret_cast<const int *>(ws + 0x60);
+				const uint8_t *const *arr = *reinterpret_cast<const uint8_t *const *const *>(ws + 0x68);
+				if (arr == nullptr || i < 0 || i >= n || n > 4096 || arr[i] == nullptr)
+					return false;
+				const uint8_t *p = arr[i];
+				out.id = *reinterpret_cast<const uint16_t *>(p + 0x20);
+				out.damage = *reinterpret_cast<const float *>(p + 0x24);
+				out.stamina = *reinterpret_cast<const float *>(p + 0x28);
+				out.conscious = *reinterpret_cast<const float *>(p + 0x2c);
+				out.blood = *reinterpret_cast<const float *>(p + 0x48);
+				out.reaction = *(p + 0x74);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		uint16_t weakest_hurt()
+		{
+			Param best{};
+			float best_score = 1e30f;
+			for (int i = 0; i < 4096; ++i)
+			{
+				Param p{};
+				if (!param_at_raw(i, p))
+				{
+					if (i > 0)
+						break;
+					continue;
+				}
+				const bool weak = (p.damage > 0.0f && p.damage <= 80.0f) || (p.blood > 0.0f && p.blood <= 150.0f);
+				const float score = p.damage + p.blood;
+				if (weak && p.reaction <= 1 && score < best_score)
+				{
+					best = p;
+					best_score = score;
+				}
+			}
+			if (best.id != 0)
+				logf("damage: burn tick = attack %u (damage %.1f blood %.1f reaction %u)", best.id, best.damage, best.blood, best.reaction);
+			return best.id;
+		}
+
 		template <size_t N, class Pred>
 		uint16_t choose(const char *what, const uint16_t (&candidates)[N], Pred ok)
 		{
@@ -235,7 +289,9 @@ namespace damage
 			g_btTnt = choose("BT TNT", bt_tnt, bloody);
 			g_samNear = choose("Sam near explosion", sam_near, hurts);
 			g_samMid = choose("Sam blast wave", sam_mid, [](const Param &) { return true; });
-			g_samBurn = choose("Sam burn", sam_burn, hurts);
+			g_samBurn = weakest_hurt();
+			if (g_samBurn == 0)
+				g_samBurn = choose("Sam burn", sam_burn, hurts);
 			// hits, not zones (378-380 are gas/electric zones): the player's punches and the rubber rounds
 			const uint16_t human_hits[] = {279, 280, 281, 62, 63, 64, 65, 67, 68, 69, 72, 73, 74, 76, 77};
 			const uint16_t punches[] = {279, 280, 281};
@@ -550,8 +606,9 @@ namespace damage
 		};
 		std::deque<Blast> g_blasts;
 		std::unordered_map<int, std::pair<WorldPosition, int>> g_projectiles; // id -> last DS position, frames unseen
-		std::unordered_set<long long> g_hot;
-		ULONGLONG g_nextBurn = 0;
+		std::unordered_map<long long, int> g_hot; // Minecraft hot blocks: 1 fire, 2 lava
+		ULONGLONG g_nextBurn = 0, g_burnUntil = 0;
+		bool g_samOnFire = false;
 
 		long long block_key(int x, int y, int z)
 		{
@@ -563,7 +620,8 @@ namespace damage
 			return {x, -z, y - double(host::y_offset())};
 		}
 
-		void parse_hot_list(const std::string &m, const char *key, bool add)
+		/// kind 1 fire, 2 lava, 0 clear
+		void parse_hot_list(const std::string &m, const char *key, int kind)
 		{
 			const size_t at = m.find(key);
 			if (at == std::string::npos)
@@ -579,8 +637,8 @@ namespace damage
 				v[n++] = int(x);
 				if (n == 3)
 				{
-					if (add)
-						g_hot.insert(block_key(v[0], v[1], v[2]));
+					if (kind != 0)
+						g_hot[block_key(v[0], v[1], v[2])] = kind;
 					else
 						g_hot.erase(block_key(v[0], v[1], v[2]));
 					n = 0;
@@ -641,10 +699,10 @@ namespace damage
 
 	void on_hot(const std::string &m)
 	{
-		parse_hot_list(m, "\"lava\":[", true);
-		parse_hot_list(m, "\"fire\":[", true);
-		parse_hot_list(m, "\"soul\":[", true);
-		parse_hot_list(m, "\"clear\":[", false);
+		parse_hot_list(m, "\"lava\":[", 2);
+		parse_hot_list(m, "\"fire\":[", 1);
+		parse_hot_list(m, "\"soul\":[", 1);
+		parse_hot_list(m, "\"clear\":[", 0);
 	}
 
 	void frame(const game::Snapshot &s)
@@ -839,21 +897,43 @@ namespace damage
 			}
 		}
 
-		// fire and lava under Sam: a small hit every 0.75 s
-		if (any && g_hurtSam && sam != nullptr && g_samBurn != 0 && !g_hot.empty() && GetTickCount64() >= g_nextBurn)
+		// Minecraft's fire rules, roughly: stepping in fire sets Sam burning until 4 s after he leaves it, lava 8 s; while
+		// burning he takes a small hit every second (two in lava), and Minecraft draws the flames on him ("samfire")
 		{
-			const float y_off = host::y_offset();
-			const int bx = int(std::floor(s.sam.pos[0])), bz = int(std::floor(-s.sam.pos[1]));
-			const int by = int(std::floor(s.sam.pos[2] + y_off + 0.05));
-			if (g_hot.count(block_key(bx, by, bz)) || g_hot.count(block_key(bx, by + 1, bz)))
+			const ULONGLONG now = GetTickCount64();
+			int in = 0;
+			if (!g_hot.empty())
+			{
+				const float y_off = host::y_offset();
+				const int bx = int(std::floor(s.sam.pos[0])), bz = int(std::floor(-s.sam.pos[1]));
+				const int by = int(std::floor(s.sam.pos[2] + y_off + 0.05));
+				for (int dy = -1; dy <= 1; ++dy)
+				{
+					const auto it = g_hot.find(block_key(bx, by + dy, bz));
+					// the block under his feet only counts as lava (Nether lava lies where the ground was)
+					if (it != g_hot.end() && (dy >= 0 || it->second == 2))
+						in = std::max(in, it->second);
+				}
+			}
+			if (in != 0)
+				g_burnUntil = std::max(g_burnUntil, now + (in == 2 ? 8000 : 4000));
+			const bool burning = now < g_burnUntil;
+			if (burning != g_samOnFire)
+			{
+				g_samOnFire = burning;
+				host::send_raw(burning ? "{\"t\":\"samfire\",\"on\":true}" : "{\"t\":\"samfire\",\"on\":false}");
+				logf("Sam %s", burning ? "catches fire" : "stops burning");
+			}
+			if (burning && any && g_hurtSam && sam != nullptr && g_samBurn != 0 && now >= g_nextBurn)
 			{
 				alignas(16) float zero[4] = {};
 				Hit h{};
-				h.pos = {s.sam.pos[0], s.sam.pos[1], s.sam.pos[2] + 0.2};
+				h.pos = {s.sam.pos[0], s.sam.pos[1], s.sam.pos[2] + 0.8};
 				h.nrm[2] = 1.0f;
-				if (post_raw(sam, &h, g_samBurn, nullptr, zero, 0.0f))
-					++g_stats.burns;
-				g_nextBurn = GetTickCount64() + 750;
+				for (int k = 0; k < (in == 2 ? 2 : 1); ++k)
+					if (post_raw(sam, &h, g_samBurn, nullptr, zero, 0.0f))
+						++g_stats.burns;
+				g_nextBurn = now + 1000;
 			}
 		}
 		g_stats.ready = g_tableRead && !g_broken && g_codeOk;

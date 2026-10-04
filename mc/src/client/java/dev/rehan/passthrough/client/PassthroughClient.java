@@ -54,6 +54,7 @@ public class PassthroughClient implements ClientModInitializer {
 		"time set noon",
 		"weather clear",
 		"clear @a",
+		"kill @e[tag=dsmc_sam_fire]",
 		// slot 1: barrier: while held, Minecraft shows the invisible collision taken from DS
 		"item replace entity @a hotbar.0 with minecraft:barrier 64",
 		"item replace entity @a hotbar.1 with minecraft:diamond_sword",

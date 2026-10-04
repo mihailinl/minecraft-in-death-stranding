@@ -44,6 +44,7 @@ public final class HostState {
 		JsonArray r = m.getAsJsonArray("r");
 		JsonArray pl = m.has("pl") ? m.getAsJsonArray("pl") : p;
 		float yaw = r.get(0).getAsFloat();
+		dev.rehan.passthrough.Passthrough.hostFeet = new double[] {pl.get(0).getAsDouble(), pl.get(1).getAsDouble(), pl.get(2).getAsDouble()};
 		latest = new Pose(
 			m.has("f") ? m.get("f").getAsLong() : 0L,
 			p.get(0).getAsDouble(), p.get(1).getAsDouble(), p.get(2).getAsDouble(),
