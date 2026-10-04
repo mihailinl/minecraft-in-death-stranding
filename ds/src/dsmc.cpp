@@ -19,6 +19,7 @@
 #include "log.h"
 #include "rawinput.h"
 #include <windows.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -33,6 +34,8 @@ namespace
 {
 	constexpr const char *kDebugEffect = "DSMC_Debug.fx";
 	constexpr int kMaxPins = 4;
+	constexpr int kMaxFlashes = 4;           // DS characters flashing red at once
+	constexpr unsigned long long kFlashMs = 350; // Minecraft's hurt flash length
 	constexpr float kPinHeight = 1.8f; // metres, Sam-sized
 
 	bool g_resolved = false;
@@ -183,6 +186,52 @@ namespace
 		float cx = 0, cy = 0;
 		host::cursor(cx, cy);
 		set_float4(runtime, "Cursor", cx, cy, host::inventory_open() ? 1.0f : 0.0f, 0.0f);
+
+		// Minecraft's red hurt flash on DS characters we just hit: their box on screen, tinted where DS's depth
+		// says the character is (DSMC_Debug.fx), fading over kFlashMs
+		damage::RecentHit hits[kMaxFlashes];
+		const int nhits = g_snap.ok ? damage::recent_hits(hits, kMaxFlashes, kFlashMs) : 0;
+		const ULONGLONG now = GetTickCount64();
+		for (int i = 0; i < kMaxFlashes; ++i)
+		{
+			float rect[4] = {0, 0, 0, 0}, zr[4] = {0, 0, 0, 0};
+			double p[3];
+			if (i < nhits && damage::entity_position(hits[i].entity, p))
+			{
+				const double half = 0.45, height = hits[i].bt ? 2.5 : 1.9;
+				float umin = 1e9f, vmin = 1e9f, umax = -1e9f, vmax = -1e9f, zmin = 1e9f, zmax = -1e9f;
+				int seen = 0;
+				for (int c = 0; c < 8; ++c)
+				{
+					const double corner[3] = {p[0] + ((c & 1) ? half : -half), p[1] + ((c & 2) ? half : -half), p[2] + ((c & 4) ? height : 0.0)};
+					const Projected q = project(corner, aspect);
+					if (!q.visible)
+						continue;
+					++seen;
+					umin = std::min(umin, q.u);
+					umax = std::max(umax, q.u);
+					vmin = std::min(vmin, q.v);
+					vmax = std::max(vmax, q.v);
+					zmin = std::min(zmin, q.depth);
+					zmax = std::max(zmax, q.depth);
+				}
+				if (seen > 0)
+				{
+					rect[0] = umin;
+					rect[1] = vmin;
+					rect[2] = umax;
+					rect[3] = vmax;
+					zr[0] = zmin;
+					zr[1] = zmax;
+					zr[2] = 1.0f - float(now - hits[i].tick) / float(kFlashMs);
+				}
+			}
+			char name[32];
+			std::snprintf(name, sizeof(name), "FlashRect%d", i);
+			set_float4(runtime, name, rect[0], rect[1], rect[2], rect[3]);
+			std::snprintf(name, sizeof(name), "FlashZ%d", i);
+			set_float4(runtime, name, zr[0], zr[1], zr[2], 0.0f);
+		}
 
 		for (int i = 0; i < kMaxPins; ++i)
 		{
@@ -345,8 +394,8 @@ namespace
 		if (ImGui::Checkbox("Explosions/fire hurt Sam", &samhurt))
 			damage::set_hurt_sam(samhurt);
 		const damage::Stats ds = damage::stats();
-		ImGui::Text("arrow hits %d  TNT hits %d  knocked out %d  died %d  Sam hits %d  burns %d", ds.arrow_hits, ds.tnt_hits, ds.knocked_out,
-			ds.killed, ds.sam_hits, ds.burns);
+		ImGui::Text("arrow hits %d  TNT hits %d  sword hits %d  finishers %d  humans hit %d  died %d  Sam hits %d  burns %d", ds.arrow_hits,
+			ds.tnt_hits, ds.melee_hits, ds.finishers, ds.knocked_out, ds.killed, ds.sam_hits, ds.burns);
 		ImGui::TextWrapped("%s", damage::status());
 		ImGui::TextUnformatted(g_physStatus);
 		ImGui::SameLine();
