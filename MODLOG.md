@@ -127,3 +127,27 @@ ground from depth or Sam's feet, and only then interactions (Minecraft TNT → D
   build mode. Barrier in hotbar slot 1 to see the collision. The aim frame shows only in build mode. A plain
   FOV write flickers because DS recomputes it ~95% of frames (needs the writer: the "Find FOV writer"
   hardware-watchpoint tool is built, not run yet).
+- **Third-person build mode** (default for F6): the cam message carries `"ao"`, an aim origin at Sam's head, and
+  `EntityPickMixin` casts from there along the camera's view. Minecraft's crosshair is hidden (`HudMixin` cancels
+  `Hud.extractCrosshair`); the DS-side frame shows the target. First person stays as an overlay option.
+- **Tall world.** DS mountains reach 700 m+, and vanilla Minecraft stops at y 320: neither blocks nor barriers could
+  be placed there (silently). The mod ships `data/minecraft/dimension_type/overworld.json` with min_y −2032,
+  height 4064 (Minecraft's maximum). The existing world loaded fine (sections are stored by absolute Y). Blocks
+  then placed at y 709.
+- **Safe Minecraft restarts.** Singleplayer has no `save-all`, and SIGTERM quits without saving. The mod now takes
+  `{"t":"save"}` (`saveEverything`), and `tools/restart_mc.sh` saves, then closes the window through a KWin script
+  (= the close button: Minecraft saves and quits), installs the new jar and relaunches.
+- **Inventory** (I): `GuiInput` (Minecraft) takes the cursor as a fraction of the picture, plus clicks and scroll
+  for the open screen, and moves `MouseHandler.xpos/ypos` (accessor) so hover and carried items follow. DS side:
+  while open, `GetRawInputData` turns mouse and keyboard events into HID events (DS ignores them), mouse motion
+  drives a cursor drawn by `DSMC_Debug.fx`.
+- **Damage** (research agent, static; the game's own sequence at 0x142992e7c re-read): DS damage is a `MsgDamage`
+  with an attack ID (`EDSAttackId`). The ID's `DSAttackParameter` (weapon system @rva 0x7beb0f8: +0x60 count,
+  +0x68 array; +0x24 Damage, +0x2C ConsciousDamage, +0x48 BloodDamage, +0x74 player reaction) decides the effect.
+  Delivery is queued (`0x14298bab0`), so it's thread-safe. `damage.cpp` reads the table at runtime. Humans only
+  get IDs with Damage 0 and ConsciousDamage > 0 (rubber bullets), and a death switches human damage off. Arrows:
+  Minecraft's `proj` steps traced on layer 54 (bullet blocker: world + character hitboxes). TNT: the AI manager's
+  radius query. Sam: grenade/blast-wave IDs by distance, and a zone attack every 0.75 s in Minecraft fire/lava
+  (`hot` blocks). Untested in game at the time of writing.
+- **Windows**: the compositor tries the Win32 named mapping first, then Wine's `Z:\dev\shm` file.
+  `ds/build.bat`, `tools/fetch_deps.ps1` and `install.ps1` are written but not yet run on Windows.

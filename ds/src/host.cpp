@@ -3,6 +3,7 @@
 #include "ground.h"
 #include "physground.h"
 #include "solid.h"
+#include "damage.h"
 #include "log.h"
 #include "ws.h"
 #include <windows.h>
@@ -44,6 +45,10 @@ namespace host
 		unsigned long long g_camsSent = 0;
 		unsigned long long g_frame = 0;
 		Aim g_aim{};
+		std::atomic<bool> g_invOpen{false};
+		std::atomic<float> g_cursorX{0.5f}, g_cursorY{0.5f};
+		std::atomic<bool> g_cursorDirty{false};
+		std::atomic<int> g_bbWidth{2560}, g_bbHeight{1440};
 		std::vector<std::pair<int, int>> g_spiral;
 		std::unordered_set<long long> g_sampled;
 
@@ -205,6 +210,31 @@ namespace host
 					parse_triples(m, "\"clear\":[", solid::block_clear);
 					continue;
 				}
+				if (m.find("\"t\":\"proj\"") != std::string::npos)
+				{
+					damage::on_projectiles(m);
+					continue;
+				}
+				if (m.find("\"t\":\"hot\"") != std::string::npos)
+				{
+					damage::on_hot(m);
+					continue;
+				}
+				if (m.find("\"t\":\"explosion\"") != std::string::npos)
+				{
+					double pos[3];
+					float r = 3.0f;
+					const size_t at = m.find("\"pos\":[");
+					const size_t rat = m.find("\"r\":");
+					if (at != std::string::npos && std::sscanf(m.c_str() + at + 7, "%lf,%lf,%lf", &pos[0], &pos[1], &pos[2]) == 3)
+					{
+						if (rat != std::string::npos)
+							r = float(std::atof(m.c_str() + rat + 4));
+						damage::on_explosion(pos[0], pos[1], pos[2], r);
+						logf("link <- explosion at %.1f %.1f %.1f r %.1f", pos[0], pos[1], pos[2], r);
+					}
+					continue;
+				}
 				if (logged++ < 4)
 					logf("link <- %.200s", m.c_str());
 			}
@@ -279,6 +309,58 @@ namespace host
 		g_relevel = true;
 	}
 
+	void toggle_inventory()
+	{
+		if (!g_ws.connected() || !g_enabled)
+			return;
+		if (!g_invOpen)
+		{
+			// Minecraft opens its (creative) inventory on its own inventory key
+			g_ws.send("{\"t\":\"key\",\"k\":\"inventory\",\"down\":true}");
+			g_ws.send("{\"t\":\"key\",\"k\":\"inventory\",\"down\":false}");
+			g_cursorX = 0.5f;
+			g_cursorY = 0.5f;
+			g_cursorDirty = true;
+			g_invOpen = true;
+		}
+		else
+		{
+			g_ws.send("{\"t\":\"key\",\"k\":\"escape\",\"down\":true}");
+			g_invOpen = false;
+		}
+		logf("inventory %s", g_invOpen ? "open" : "closed");
+	}
+
+	bool inventory_open()
+	{
+		return g_invOpen && g_ws.connected() && g_enabled;
+	}
+
+	void cursor(float &x, float &y)
+	{
+		x = g_cursorX;
+		y = g_cursorY;
+	}
+
+	void cursor_move(long dx, long dy)
+	{
+		// one mouse count = one pixel of DS's picture
+		const int w = std::max(1, g_bbWidth.load()), h = std::max(1, g_bbHeight.load());
+		g_cursorX = std::clamp(g_cursorX.load() + float(dx) / float(w), 0.0f, 1.0f);
+		g_cursorY = std::clamp(g_cursorY.load() + float(dy) / float(h), 0.0f, 1.0f);
+		g_cursorDirty = true;
+	}
+
+	void gui_button(int button, bool down)
+	{
+		sendf("{\"t\":\"click\",\"b\":%d,\"down\":%s}", button, down ? "true" : "false");
+	}
+
+	void gui_scroll(int notches)
+	{
+		sendf("{\"t\":\"gscroll\",\"d\":%d}", notches);
+	}
+
 	void mouse_button(const char *key, bool down)
 	{
 		sendf("{\"t\":\"key\",\"k\":\"%s\",\"down\":%s}", key, down ? "true" : "false");
@@ -302,6 +384,11 @@ namespace host
 	int level_epoch()
 	{
 		return g_epoch;
+	}
+
+	void send_raw(const std::string &message)
+	{
+		g_ws.send(message);
 	}
 
 	void send_solid(const std::string &columns)
@@ -337,6 +424,14 @@ namespace host
 			on_connected(bw, bh);
 		}
 		drain_messages();
+
+		if (bw > 0 && bh > 0)
+		{
+			g_bbWidth = bw;
+			g_bbHeight = bh;
+		}
+		if (g_invOpen && g_cursorDirty.exchange(false))
+			sendf("{\"t\":\"mouse\",\"x\":%.5f,\"y\":%.5f}", g_cursorX.load(), g_cursorY.load());
 
 		// Minecraft's window = DS's picture, at up to ~1080p worth of pixels (the effect scales it up)
 		if (bw > 0 && bh > 0 && (bw * 65536 + bh) != g_viewSent)

@@ -12,8 +12,12 @@ using namespace reshade::api;
 
 namespace
 {
-	// Minecraft runs natively on Linux and writes /dev/shm/dsmc-frame; under Wine that file is Z:\dev\shm\dsmc-frame.
+	// Where Minecraft's frames are:
+	//   Linux (DS under Wine/Proton, Minecraft native): the file /dev/shm/dsmc-frame, which Wine sees as Z:\dev\shm\...
+	//   Windows (both native): the named mapping the mod creates there
 	constexpr const wchar_t *kMappingPath = L"Z:\\dev\\shm\\dsmc-frame";
+	constexpr const wchar_t *kMappingName = L"Local\\MCPassthroughFrame";
+	// (both are tried, named mapping first: no need to detect Wine, which Proton may hide)
 	constexpr uint32_t kMagic = 0x5450434D; // "MCPT"
 	constexpr int kHeader = 4096;
 	constexpr int kSlotDesc = 256;
@@ -78,13 +82,18 @@ namespace
 		if (GetTickCount() < g_nextOpenAttempt)
 			return false;
 		g_nextOpenAttempt = GetTickCount() + 1000;
-		g_file = CreateFileW(kMappingPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-		if (g_file == INVALID_HANDLE_VALUE)
-			return false;
-		g_mapping = CreateFileMappingW(g_file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+		g_mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, kMappingName);
 		if (g_mapping == nullptr)
 		{
-			CloseHandle(g_file);
+			g_file = CreateFileW(kMappingPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (g_file == INVALID_HANDLE_VALUE)
+				return false;
+			g_mapping = CreateFileMappingW(g_file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+		}
+		if (g_mapping == nullptr)
+		{
+			if (g_file != INVALID_HANDLE_VALUE)
+				CloseHandle(g_file);
 			g_file = INVALID_HANDLE_VALUE;
 			return false;
 		}
@@ -95,7 +104,8 @@ namespace
 				UnmapViewOfFile(header);
 			CloseHandle(g_mapping);
 			g_mapping = nullptr;
-			CloseHandle(g_file);
+			if (g_file != INVALID_HANDLE_VALUE)
+				CloseHandle(g_file);
 			g_file = INVALID_HANDLE_VALUE;
 			return false;
 		}
@@ -107,7 +117,8 @@ namespace
 		{
 			CloseHandle(g_mapping);
 			g_mapping = nullptr;
-			CloseHandle(g_file);
+			if (g_file != INVALID_HANDLE_VALUE)
+				CloseHandle(g_file);
 			g_file = INVALID_HANDLE_VALUE;
 			return false;
 		}

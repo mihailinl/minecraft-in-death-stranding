@@ -26,9 +26,34 @@ namespace rawinput
 		UINT WINAPI hooked(HRAWINPUT input, UINT command, LPVOID data, PUINT size, UINT header_size)
 		{
 			const UINT result = g_original(input, command, data, size, header_size);
-			if (data == nullptr || command != RID_INPUT || result == UINT(-1) || result < sizeof(RAWINPUTHEADER) || !host::build_mode())
+			if (data == nullptr || command != RID_INPUT || result == UINT(-1) || result < sizeof(RAWINPUTHEADER))
 				return result;
 			auto *raw = static_cast<RAWINPUT *>(data);
+			if (host::inventory_open())
+			{
+				// Minecraft's inventory has the input: the mouse moves our cursor, DS sees nothing at all (camera
+				// and Sam stay put; the event becomes a HID report DS didn't register for)
+				if (raw->header.dwType == RIM_TYPEMOUSE)
+				{
+					const RAWMOUSE &m = raw->data.mouse;
+					if ((m.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && (m.lLastX != 0 || m.lLastY != 0))
+						host::cursor_move(m.lLastX, m.lLastY);
+					const USHORT f = m.usButtonFlags;
+					if (f & RI_MOUSE_LEFT_BUTTON_DOWN) host::gui_button(0, true);
+					if (f & RI_MOUSE_LEFT_BUTTON_UP) host::gui_button(0, false);
+					if (f & RI_MOUSE_RIGHT_BUTTON_DOWN) host::gui_button(1, true);
+					if (f & RI_MOUSE_RIGHT_BUTTON_UP) host::gui_button(1, false);
+					if (f & RI_MOUSE_MIDDLE_BUTTON_DOWN) host::gui_button(2, true);
+					if (f & RI_MOUSE_MIDDLE_BUTTON_UP) host::gui_button(2, false);
+					if ((f & RI_MOUSE_WHEEL) && static_cast<short>(m.usButtonData) != 0)
+						host::gui_scroll(static_cast<short>(m.usButtonData) > 0 ? 1 : -1);
+				}
+				if (raw->header.dwType == RIM_TYPEMOUSE || raw->header.dwType == RIM_TYPEKEYBOARD)
+					raw->header.dwType = RIM_TYPEHID;
+				return result;
+			}
+			if (!host::build_mode())
+				return result;
 			if (raw->header.dwType != RIM_TYPEMOUSE)
 				return result;
 			RAWMOUSE &mouse = raw->data.mouse;

@@ -14,6 +14,7 @@
 #include "physics.h"
 #include "physground.h"
 #include "solid.h"
+#include "damage.h"
 #include "watch.h"
 #include "log.h"
 #include "rawinput.h"
@@ -178,7 +179,10 @@ namespace
 			set_float4(runtime, name, corners[i].u, corners[i].v, corners[i].depth, corners[i].visible ? 1.0f : 0.0f);
 		}
 		if (const effect_uniform_variable v = runtime->find_uniform_variable(kDebugEffect, "AimMode"); v.handle != 0)
-			runtime->set_uniform_value_float(v, mode);
+			runtime->set_uniform_value_float(v, host::inventory_open() ? 0.0f : mode);
+		float cx = 0, cy = 0;
+		host::cursor(cx, cy);
+		set_float4(runtime, "Cursor", cx, cy, host::inventory_open() ? 1.0f : 0.0f, 0.0f);
 
 		for (int i = 0; i < kMaxPins; ++i)
 		{
@@ -227,6 +231,7 @@ namespace
 		host::frame(g_snap, int(w), int(h));
 		physground::frame(g_snap);
 		solid::frame(g_snap);
+		damage::frame(g_snap);
 		ground::on_present(runtime);
 		watch::poll();
 
@@ -234,6 +239,8 @@ namespace
 			host::set_enabled(!host::enabled());
 		if (runtime->is_key_pressed(VK_F6))
 			host::set_build_mode(!host::build_mode());
+		if (runtime->is_key_pressed('I') || (host::inventory_open() && runtime->is_key_pressed(VK_ESCAPE)))
+			host::toggle_inventory();
 		if (runtime->is_key_pressed(VK_F5))
 		{
 			host::relevel();
@@ -330,6 +337,17 @@ namespace
 		ImGui::SameLine();
 		if (ImGui::Button("Test box"))
 			solid::spawn_test(g_snap);
+		bool npcs = damage::hurt_npcs();
+		if (ImGui::Checkbox("Minecraft weapons hurt DS (humans knocked out, BTs hurt)", &npcs))
+			damage::set_hurt_npcs(npcs);
+		ImGui::SameLine();
+		bool samhurt = damage::hurt_sam();
+		if (ImGui::Checkbox("Explosions/fire hurt Sam", &samhurt))
+			damage::set_hurt_sam(samhurt);
+		const damage::Stats ds = damage::stats();
+		ImGui::Text("arrow hits %d  TNT hits %d  knocked out %d  died %d  Sam hits %d  burns %d", ds.arrow_hits, ds.tnt_hits, ds.knocked_out,
+			ds.killed, ds.sam_hits, ds.burns);
+		ImGui::TextWrapped("%s", damage::status());
 		ImGui::TextUnformatted(g_physStatus);
 		ImGui::SameLine();
 		if (ImGui::Button("Physics probe (F10)"))

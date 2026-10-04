@@ -190,6 +190,18 @@ public final class WorldBridge {
 		});
 	}
 
+	/** {"t":"save"}: write the world to disk now (singleplayer has no save-all command); the host calls it before restarts. */
+	public static void save() {
+		MinecraftServer s = server;
+		if (s != null) {
+			s.execute(() -> {
+				boolean ok = s.saveEverything(false, true, true);
+				Passthrough.LOG.info("world saved on host request: {}", ok);
+				Passthrough.events.accept("{\"t\":\"saved\",\"ok\":" + ok + "}");
+			});
+		}
+	}
+
 	/** Server thread, from Level.setBlock: remember the change; flushed once per tick. */
 	public static void onBlockChanged(final ServerLevel level, final BlockPos pos, final BlockState state) {
 		if (!Passthrough.active || level != level.getServer().overworld()) {

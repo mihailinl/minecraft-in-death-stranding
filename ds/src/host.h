@@ -35,6 +35,8 @@ namespace host
 	int level_epoch();
 	/// Barrier columns "x,z,yBottom,yTop,..." in Minecraft coordinates.
 	void send_solid(const std::string &columns);
+	/// Any message to the Minecraft mod.
+	void send_raw(const std::string &message);
 
 	/// What Minecraft's crosshair is on (Minecraft block coordinates): the block hit and where a block would go.
 	struct Aim
@@ -45,7 +47,16 @@ namespace host
 	};
 	Aim aim();
 
+	/// Minecraft's inventory over DS: the mouse drives a cursor of ours, DS sees no input while it is open.
+	void toggle_inventory();
+	bool inventory_open();
+	/// Cursor as a fraction of the picture (for drawing it).
+	void cursor(float &x, float &y);
+
 	// called from the raw input hook (DS's window thread)
+	void cursor_move(long dx, long dy);
+	void gui_button(int button, bool down);
+	void gui_scroll(int notches);
 	void mouse_button(const char *key, bool down);
 	void scroll(int notches);
 

@@ -20,6 +20,8 @@ uniform float4 PinH3; uniform float4 TopH3;
 uniform float4 AimC0; uniform float4 AimC1; uniform float4 AimC2; uniform float4 AimC3;
 uniform float4 AimC4; uniform float4 AimC5; uniform float4 AimC6; uniform float4 AimC7;
 uniform float AimMode;
+// Cursor while Minecraft's inventory is open: uv, on
+uniform float4 Cursor;
 uniform float Timer < source = "timer"; >;
 
 float scene_view_z(float2 uv)
@@ -98,6 +100,17 @@ float3 PS_Pins(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 	draw_pin(px, PinH1, TopH1, float3(1.0, 0.1, 0.9), c);
 	draw_pin(px, PinH2, TopH2, float3(1.0, 0.1, 0.9), c);
 	draw_pin(px, PinH3, TopH3, float3(1.0, 0.1, 0.9), c);
+	if (Cursor.z > 0.5)
+	{
+		// an arrow cursor: white with a dark outline, tip at the cursor position
+		float2 p = px - Cursor.xy * BUFFER_SCREEN_SIZE;
+		bool inner = p.x >= 0.0 && p.y >= 0.0 && p.y <= 20.0 && p.x <= p.y * 0.62 && !(p.y > 15.0 && p.x > (20.0 - p.y) * 1.6);
+		bool outer = p.x >= -1.5 && p.y >= -1.5 && p.y <= 22.0 && p.x <= p.y * 0.62 + 2.0 && !(p.y > 16.5 && p.x > (22.0 - p.y) * 1.6 + 1.0);
+		if (inner)
+			c = float3(1.0, 1.0, 1.0);
+		else if (outer)
+			c = float3(0.05, 0.05, 0.05);
+	}
 	return c;
 }
 

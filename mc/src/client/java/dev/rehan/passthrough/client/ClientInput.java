@@ -65,6 +65,7 @@ final class ClientInput {
 					inventory.setSelectedSlot(Math.floorMod(inventory.getSelectedSlot() - m.get("d").getAsInt(), size));
 				}
 			}
+			case "mouse", "click", "gscroll" -> GuiInput.handle(minecraft, m);
 			case "hand" -> HostState.handHidden = m.get("hidden").getAsBoolean();
 			case "crosshair" -> HostState.crosshairHidden = m.get("hidden").getAsBoolean();
 			case "hud" -> {
