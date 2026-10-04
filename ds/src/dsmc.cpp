@@ -241,6 +241,24 @@ namespace
 			host::set_build_mode(!host::build_mode());
 		if (runtime->is_key_pressed('I') || (host::inventory_open() && runtime->is_key_pressed(VK_ESCAPE)))
 			host::toggle_inventory();
+		if (host::inventory_open())
+		{
+			// the inventory's clicks and wheel, from ReShade's input (ReShade: 0 left, 1 middle, 2 right;
+			// Minecraft: 0 left, 1 right, 2 middle)
+			const uint32_t reshade_button[3] = {0, 2, 1};
+			for (int mc = 0; mc < 3; ++mc)
+			{
+				if (runtime->is_mouse_button_pressed(reshade_button[mc]))
+					host::gui_button(mc, true);
+				if (runtime->is_mouse_button_released(reshade_button[mc]))
+					host::gui_button(mc, false);
+			}
+			uint32_t mx = 0, my = 0;
+			int16_t wheel = 0;
+			runtime->get_mouse_cursor_position(&mx, &my, &wheel);
+			if (wheel != 0)
+				host::gui_scroll(wheel > 0 ? 1 : -1);
+		}
 		if (runtime->is_key_pressed(VK_F5))
 		{
 			host::relevel();

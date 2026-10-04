@@ -354,6 +354,7 @@ namespace host
 	void gui_button(int button, bool down)
 	{
 		sendf("{\"t\":\"click\",\"b\":%d,\"down\":%s}", button, down ? "true" : "false");
+		logf("inventory click b %d %s at %.3f %.3f", button, down ? "down" : "up", g_cursorX.load(), g_cursorY.load());
 	}
 
 	void gui_scroll(int notches)

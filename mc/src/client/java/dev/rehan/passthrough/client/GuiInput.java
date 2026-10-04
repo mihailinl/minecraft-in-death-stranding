@@ -2,6 +2,7 @@ package dev.rehan.passthrough.client;
 
 import com.google.gson.JsonObject;
 import com.mojang.blaze3d.platform.Window;
+import dev.rehan.passthrough.Passthrough;
 import dev.rehan.passthrough.client.mixin.MouseHandlerAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -46,15 +47,17 @@ final class GuiInput {
 			case "click" -> {
 				int b = m.get("b").getAsInt();
 				boolean down = m.get("down").getAsBoolean();
+				boolean handled = false;
 				if (screen != null) {
+					// as MouseHandler.onButton does: the event at the cursor, then afterMouseAction
 					MouseButtonEvent event = new MouseButtonEvent(gx, gy, new MouseButtonInfo(b, 0));
-					if (down) {
-						screen.mouseClicked(event, false);
-					} else {
-						screen.mouseReleased(event);
-					}
+					handled = down ? screen.mouseClicked(event, false) : screen.mouseReleased(event);
+					screen.afterMouseAction();
 				}
 				held = down ? b : -1;
+				Passthrough.LOG.info("host click b {} {} on {} at {}, {} (handled {})", b, down ? "down" : "up",
+					screen == null ? "no screen" : screen.getClass().getSimpleName(), String.format(java.util.Locale.ROOT, "%.1f", gx),
+					String.format(java.util.Locale.ROOT, "%.1f", gy), handled);
 			}
 			case "gscroll" -> {
 				if (screen != null) {
