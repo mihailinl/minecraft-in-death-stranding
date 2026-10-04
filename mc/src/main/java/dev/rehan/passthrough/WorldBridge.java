@@ -114,7 +114,8 @@ public final class WorldBridge {
 
 	private static boolean solidForHost(final ServerLevel level, final BlockPos pos, final BlockState state) {
 		// the Nether's ground is the host's own ground turned: nothing to collide with that isn't there already
-		return !state.isAir() && !state.is(Blocks.BARRIER) && !state.getCollisionShape(level, pos).isEmpty() && !Nether.isGround(pos);
+		// (the GTA original left the Nether's ground out: it stood on GTA's own ground. In DS it gets collision too.)
+		return !state.isAir() && !state.is(Blocks.BARRIER) && !state.getCollisionShape(level, pos).isEmpty();
 	}
 
 	/** Arrows the host already hit something with (they stay where they hit and aren't reported again). */
@@ -212,6 +213,15 @@ public final class WorldBridge {
 		if (!placingGround) {
 			changes.put(pos.immutable(), solidForHost(level, pos, state));
 		}
+	}
+
+	/**
+	 * A block that must be solid for the host's player even though it was placed as ground (the Nether's netherrack,
+	 * magma, soul sand...: in DS they stand in for the invisible copy of the ground, up to half a block off DS's real
+	 * surface, so they get their own collision there). Server thread.
+	 */
+	static void reportSolid(final BlockPos pos, final boolean solid) {
+		changes.put(pos.immutable(), solid);
 	}
 
 	/** While on, block changes are the host's own ground being edited (not reported as blocks to collide with). */

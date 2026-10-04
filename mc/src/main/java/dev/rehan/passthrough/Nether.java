@@ -315,6 +315,8 @@ public final class Nether {
 		changed.putIfAbsent(p, level.getBlockState(p));
 		level.setBlock(p, state, FLAGS);
 		onBlockChanged(p, state); // quiet ground skips the usual report; hot blocks still count
+		// ...but the host's player collides with the Nether's solid blocks (fire, roots and lava stay passable)
+		WorldBridge.reportSolid(p, !state.isAir() && !state.getCollisionShape(level, p).isEmpty());
 	}
 
 	/** Nether mobs keep coming out of the portal (both sides), a few at a time. */

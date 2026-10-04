@@ -212,7 +212,7 @@ namespace host
 				{
 					// Minecraft's solid blocks (barriers excluded): Sam collides with them in DS
 					static int logged_blocks = 0;
-					if (logged_blocks++ < 20)
+					if (logged_blocks++ < 200)
 						logf("link <- blocks (%zu bytes)", m.size());
 					parse_triples(m, "\"set\":[", solid::block_set);
 					parse_triples(m, "\"clear\":[", solid::block_clear);

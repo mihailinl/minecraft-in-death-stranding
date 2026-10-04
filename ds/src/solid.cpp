@@ -12,7 +12,7 @@ namespace solid
 	namespace
 	{
 		constexpr int kPerFrame = 16;      // box changes applied per frame
-		constexpr int kMaxBoxes = 4000;
+		constexpr int kMaxBoxes = 8000;  // builds + a Nether's ground (radius 26: ~2100 blocks)
 
 		struct Change
 		{
