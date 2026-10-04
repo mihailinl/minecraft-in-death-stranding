@@ -22,6 +22,11 @@ uniform float4 AimC4; uniform float4 AimC5; uniform float4 AimC6; uniform float4
 uniform float AimMode;
 // Cursor while Minecraft's inventory is open: uv, on
 uniform float4 Cursor;
+// Minecraft's red hurt flash on DS characters we hit: screen box (uv min.xy, max.xy) and view depth (zmin, zmax, alpha)
+uniform float4 FlashRect0; uniform float4 FlashZ0;
+uniform float4 FlashRect1; uniform float4 FlashZ1;
+uniform float4 FlashRect2; uniform float4 FlashZ2;
+uniform float4 FlashRect3; uniform float4 FlashZ3;
 uniform float Timer < source = "timer"; >;
 
 float scene_view_z(float2 uv)
@@ -77,10 +82,25 @@ void draw_edge(float2 px, float4 a4, float4 b4, float3 colour, inout float3 c)
 	c = lerp(c, colour, saturate(core + halo) * (hidden ? 0.5 : 1.0));
 }
 
+// one hurt flash: inside the character's screen box, only where DS's depth is at the character (not what's behind)
+void hurt_flash(float2 uv, float4 rect, float4 z, inout float3 c)
+{
+	if (z.z <= 0.0 || uv.x < rect.x || uv.x > rect.z || uv.y < rect.y || uv.y > rect.w)
+		return;
+	float d = scene_view_z(uv);
+	if (d < z.x - 0.3 || d > z.y + 0.3)
+		return;
+	c = lerp(c, c * float3(1.0, 0.3, 0.3) + float3(0.35, 0.0, 0.0), saturate(z.z) * 0.8);
+}
+
 float3 PS_Pins(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
 	float3 c = tex2D(ReShade::BackBuffer, uv).rgb;
 	float2 px = pos.xy;
+	hurt_flash(uv, FlashRect0, FlashZ0, c);
+	hurt_flash(uv, FlashRect1, FlashZ1, c);
+	hurt_flash(uv, FlashRect2, FlashZ2, c);
+	hurt_flash(uv, FlashRect3, FlashZ3, c);
 	if (AimMode > 0.5)
 	{
 		float pulse = 0.85 + 0.15 * sin(Timer * 0.006);

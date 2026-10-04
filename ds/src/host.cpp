@@ -211,6 +211,11 @@ namespace host
 					parse_triples(m, "\"clear\":[", solid::block_clear);
 					continue;
 				}
+				if (m.find("\"t\":\"melee\"") != std::string::npos)
+				{
+					damage::on_melee();
+					continue;
+				}
 				if (m.find("\"t\":\"proj\"") != std::string::npos)
 				{
 					damage::on_projectiles(m);

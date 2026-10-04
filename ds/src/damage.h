@@ -15,6 +15,7 @@ namespace damage
 	void on_explosion(double x, double y, double z, float radius); // Minecraft coordinates
 	void on_projectiles(const std::string &message);                // {"t":"proj","p":[[id,"kind",x,y,z],...]}
 	void on_hot(const std::string &message);                        // {"t":"hot","lava":[...],"fire":[...],"soul":[...],"clear":[...]}
+	void on_melee(); // {"t":"melee"}: Minecraft's player swung a sword
 	/// Once per presented frame: traces, hits, burns.
 	void frame(const game::Snapshot &snap);
 
@@ -36,9 +37,20 @@ namespace damage
 
 	struct Stats
 	{
-		int arrow_hits, tnt_hits, sam_hits, burns, knocked_out, killed;
+		int arrow_hits, tnt_hits, melee_hits, finishers, sam_hits, burns, knocked_out, killed;
 		bool ready;
 	};
+
+	/// DS characters we hit recently, newest first (for the red hurt flash).
+	struct RecentHit
+	{
+		void *entity;
+		bool bt;
+		unsigned long long tick; // GetTickCount64
+	};
+	int recent_hits(RecentHit *out, int max_out, unsigned long long within_ms);
+	/// An entity's live world position (Entity+0xC8), SEH-guarded.
+	bool entity_position(void *entity, double out[3]);
 	Stats stats();
 	/// Which attack IDs were chosen (or why not).
 	const char *status();

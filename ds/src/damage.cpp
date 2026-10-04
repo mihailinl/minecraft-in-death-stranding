@@ -18,6 +18,7 @@ namespace damage
 	{
 		// ---- engine (RVAs; Steam build 13300582, fingerprinted before first use) ----
 		constexpr uintptr_t kMakeAttack = 0x298ac90;   // void *(Entity *instigator, u16 attackId): DS attack context
+		constexpr uintptr_t kAttackInfo = 0x294ddf0;   // DSAttackEventInfo *(void *ctx): +8 u32 per-hit key, +0xE u8
 		constexpr uintptr_t kMsgDamageCtor = 0x2314190; // (msg, link, damageType, amount, const vec4 *, float, float, int)
 		constexpr uintptr_t kMsgFromHit = 0x2318810;   // (msg, const Hit *)
 		constexpr uintptr_t kPostDamage = 0x298bab0;   // (Entity *victim, msg): queued on the EntityManager, deferred
@@ -52,6 +53,8 @@ namespace damage
 		};
 
 		using FnMakeAttack = void *(*)(void *, uint16_t);
+		using FnAttackInfo = void *(*)(void *);
+		uint32_t g_hitKey = 0x4D430000; // "MC" + a counter: unique, non-zero hit keys
 		using FnMsgCtor = void *(*)(void *, void *, const void *, float, const float *, float, float, int32_t);
 		using FnMsgFromHit = void (*)(void *, const Hit *);
 		using FnPost = void (*)(void *, const void *);
@@ -74,6 +77,13 @@ namespace damage
 
 		// chosen attack IDs (0 = none fits)
 		uint16_t g_humanArrow = 0, g_humanTnt = 0, g_btArrow = 0, g_btTnt = 0, g_samNear = 0, g_samMid = 0, g_samBurn = 0;
+		// stronger hits: a BT goes down to one Minecraft hit, a human is knocked out on the second
+		uint16_t g_btStrong = 0;      // the bloodiest BT attack (blood grenade blast)
+		uint16_t g_humanFinisher = 0; // the non-lethal attack with the most ConsciousDamage
+		uint16_t g_humanMelee = 0;    // a sword: the player's own punch when it is non-lethal
+		constexpr int kBtPosts = 3;       // posts of g_btStrong per hit on a BT
+		constexpr int kFinisherPosts = 6; // posts of g_humanFinisher on a human's second hit
+		constexpr ULONGLONG kHitMemoryMs = 20000; // a human's hit count resets after this long unhit
 		bool g_tableRead = false;
 
 		uint64_t fnv(const uint8_t *p, size_t n)
@@ -101,6 +111,7 @@ namespace damage
 				{kMsgFromHit, 0x20, 0xf89f27752bbd9c2bull}, {kPostDamage, 0x20, 0xf55d688598186ae0ull},
 				{kLinkRelease, 0x20, 0xd835044f6951be9dull}, {kInRadius, 0x20, 0x918b48b1a9e2bc0dull},
 				{kFindComponent, 0x20, 0x9cbe8a46af3a8a5aull}, {kIsKnockedDown, 0x20, 0x8b2ce86be405765full},
+				{kAttackInfo, 0x20, 0x208816c2438c70e1ull},
 				{0x2992e7c, 0x7b, 0x7affc24a4f0df632ull}, // the game's own MsgDamage sequence (the BT hit helper)
 			};
 			g_codeOk = true;
@@ -153,6 +164,26 @@ namespace damage
 			}
 		}
 
+		/// The candidate that passes `ok` with the largest `score` (0 = none).
+		template <size_t N, class Pred, class Score>
+		uint16_t choose_best(const char *what, const uint16_t (&candidates)[N], Pred ok, Score score)
+		{
+			uint16_t best = 0;
+			float best_score = -1.0f;
+			for (uint16_t id : candidates)
+			{
+				Param p{};
+				if (read_param_raw(id, p) && ok(p) && score(p) > best_score)
+				{
+					best = id;
+					best_score = score(p);
+				}
+			}
+			if (best == 0)
+				logf("damage: no attack ID fits '%s'", what);
+			return best;
+		}
+
 		template <size_t N, class Pred>
 		uint16_t choose(const char *what, const uint16_t (&candidates)[N], Pred ok)
 		{
@@ -173,8 +204,8 @@ namespace damage
 			Param probe{};
 			if (!read_param_raw(66, probe) && !read_param_raw(13, probe))
 				return false; // weapon system not up yet (menus)
-			const uint16_t dump[] = {13, 62, 63, 64, 65, 66, 67, 68, 69, 72, 73, 74, 75, 76, 77, 108, 258, 259, 279, 347, 350, 351, 355,
-				357, 360, 362, 376, 378, 379, 380};
+			const uint16_t dump[] = {13, 62, 63, 64, 65, 66, 67, 68, 69, 72, 73, 74, 75, 76, 77, 108, 258, 259, 279, 280, 281, 347, 350, 351,
+				355, 357, 360, 362, 376, 378, 379, 380};
 			for (uint16_t id : dump)
 			{
 				Param p{};
@@ -201,9 +232,20 @@ namespace damage
 			g_samNear = choose("Sam near explosion", sam_near, hurts);
 			g_samMid = choose("Sam blast wave", sam_mid, [](const Param &) { return true; });
 			g_samBurn = choose("Sam burn", sam_burn, hurts);
+			// hits, not zones (378-380 are gas/electric zones): the player's punches and the rubber rounds
+			const uint16_t human_hits[] = {279, 280, 281, 62, 63, 64, 65, 67, 68, 69, 72, 73, 74, 76, 77};
+			const uint16_t punches[] = {279, 280, 281};
+			const uint16_t bt_strong[] = {362, 360, 77, 76, 69, 68, 67};
+			g_humanFinisher = choose_best("human finisher (non-lethal)", human_hits, nonlethal, [](const Param &p) { return p.conscious; });
+			g_humanMelee = choose_best("human melee (non-lethal)", punches, nonlethal, [](const Param &p) { return p.conscious; });
+			if (g_humanMelee == 0)
+				g_humanMelee = g_humanArrow;
+			g_btStrong = choose_best("BT strong", bt_strong, bloody, [](const Param &p) { return p.blood; });
+			if (g_btStrong == 0)
+				g_btStrong = g_btArrow;
 			std::snprintf(g_status, sizeof(g_status),
-				"attack IDs: human arrow %u, human TNT %u, BT arrow %u, BT TNT %u, Sam near %u, Sam blast %u, Sam burn %u", g_humanArrow,
-				g_humanTnt, g_btArrow, g_btTnt, g_samNear, g_samMid, g_samBurn);
+				"attack IDs: human arrow %u, TNT %u, melee %u, finisher %u x%d; BT %u x%d; Sam near %u, blast %u, burn %u", g_humanArrow,
+				g_humanTnt, g_humanMelee, g_humanFinisher, kFinisherPosts, g_btStrong, kBtPosts, g_samNear, g_samMid, g_samBurn);
 			logf("damage: %s", g_status);
 			g_tableRead = true;
 			return true;
@@ -217,6 +259,14 @@ namespace damage
 				void *ctx = fn<FnMakeAttack>(kMakeAttack)(instigator, attack);
 				if (ctx == nullptr)
 					return false;
+				// as the game does (0x142992e5e..e74): the attack info carries a per-hit key; DSMuleDamageComponent
+				// ignores a key it saw recently, so a 0 key lets only the first hit on a MULE land
+				char *info = static_cast<char *>(fn<FnAttackInfo>(kAttackInfo)(ctx));
+				if (info != nullptr)
+				{
+					*reinterpret_cast<uint8_t *>(info + 0xE) = 0;
+					*reinterpret_cast<uint32_t *>(info + 0x8) = ++g_hitKey;
+				}
 				alignas(16) uint8_t msg[0xB0] = {};
 				fn<FnMsgCtor>(kMsgDamageCtor)(msg, *reinterpret_cast<void **>(static_cast<char *>(ctx) + 0xE8),
 					reinterpret_cast<const void *>(g_base + kDefaultDamageType), 0.0f, impulse, scale, -1.0f, -1);
@@ -340,31 +390,136 @@ namespace damage
 		};
 		std::deque<Watch> g_watch;
 
-		void hurt(void *victim, Kind kind, const WorldPosition &at, const float dir[3], bool explosion, void *sam)
+		enum class Source
+		{
+			Arrow,
+			Tnt,
+			Melee,
+		};
+		const char *source_name(Source src)
+		{
+			return src == Source::Arrow ? "arrow" : src == Source::Tnt ? "TNT" : "sword";
+		}
+
+		// more posts of one attack, one per frame (several in one frame may count as one hit)
+		struct Followup
+		{
+			void *victim;
+			Kind kind;
+			uint16_t id;
+			Hit hit;
+			float impulse[4];
+			void *sam;
+			int remaining;
+		};
+		std::deque<Followup> g_followups;
+
+		struct HitCount
+		{
+			int hits;
+			ULONGLONG last;
+		};
+		std::unordered_map<void *, HitCount> g_hitCounts;
+
+		// recent hits, for the red flash (dsmc.cpp)
+		RecentHit g_recent[8];
+		int g_recentNext = 0;
+
+		void remember(void *victim, Kind kind)
+		{
+			g_recent[g_recentNext++ % 8] = {victim, kind == Kind::BT, GetTickCount64()};
+		}
+
+		void hurt(void *victim, Kind kind, const WorldPosition &at, const float dir[3], Source src, void *sam)
 		{
 			uint16_t id = 0;
+			int posts = 1, nth = 0;
 			if (kind == Kind::Human && !g_humansOff)
-				id = explosion ? g_humanTnt : g_humanArrow;
+			{
+				const ULONGLONG now = GetTickCount64();
+				HitCount &hc = g_hitCounts[victim];
+				if (now - hc.last > kHitMemoryMs)
+					hc.hits = 0;
+				hc.last = now;
+				nth = ++hc.hits;
+				if (nth >= 2 && g_humanFinisher != 0)
+				{
+					id = g_humanFinisher; // the second hit: consciousness surely down to zero
+					posts = kFinisherPosts;
+					++g_stats.finishers;
+				}
+				else
+					id = src == Source::Tnt ? g_humanTnt : src == Source::Melee ? g_humanMelee : g_humanArrow;
+			}
 			else if (kind == Kind::BT)
-				id = explosion ? g_btTnt : g_btArrow;
+			{
+				id = g_btStrong; // one hit: a blood grenade's worth, several times over
+				posts = kBtPosts;
+			}
 			if (id == 0)
 				return;
-			Hit h{};
-			h.pos = at;
-			h.nrm[0] = -dir[0];
-			h.nrm[1] = -dir[1];
-			h.nrm[2] = -dir[2];
+			Followup f{};
+			f.victim = victim;
+			f.kind = kind;
+			f.id = id;
+			f.hit.pos = at;
+			f.hit.nrm[0] = -dir[0];
+			f.hit.nrm[1] = -dir[1];
+			f.hit.nrm[2] = -dir[2];
+			f.impulse[0] = dir[0];
+			f.impulse[1] = dir[1];
+			f.impulse[2] = dir[2];
+			f.sam = sam;
 			alignas(16) float impulse[4] = {dir[0], dir[1], dir[2], 0.0f};
-			if (post_raw(victim, &h, id, sam, impulse, 1.0f))
+			if (!post_raw(victim, &f.hit, id, sam, impulse, 1.0f))
+				return;
+			if (posts > 1)
 			{
-				if (kind == Kind::Human)
+				f.remaining = posts - 1;
+				g_followups.push_back(f);
+			}
+			remember(victim, kind);
+			if (kind == Kind::Human)
+			{
+				++g_stats.knocked_out;
+				g_watch.push_back({victim, 0});
+			}
+			logf("HIT %s %p #%d with attack %u x%d (%s)", kind == Kind::Human ? "human" : "BT", victim, nth, id, posts, source_name(src));
+		}
+
+		/// One queued follow-up post per victim per frame.
+		void post_followups()
+		{
+			for (auto it = g_followups.begin(); it != g_followups.end();)
+			{
+				if (is_dead_raw(it->victim) || (it->kind == Kind::Human && g_humansOff))
 				{
-					++g_stats.knocked_out;
-					g_watch.push_back({victim, 0});
+					it = g_followups.erase(it);
+					continue;
 				}
-				logf("HIT %s %p with attack %u (%s)", kind == Kind::Human ? "human" : "BT", victim, id, explosion ? "TNT" : "arrow");
+				alignas(16) float impulse[4] = {it->impulse[0], it->impulse[1], it->impulse[2], 0.0f};
+				post_raw(it->victim, &it->hit, it->id, it->sam, impulse, 1.0f);
+				it = --it->remaining <= 0 ? g_followups.erase(it) : std::next(it);
 			}
 		}
+
+		bool position_raw(void *e, double out[3])
+		{
+			__try
+			{
+				const auto *p = reinterpret_cast<const double *>(static_cast<char *>(e) + 0xC8);
+				out[0] = p[0];
+				out[1] = p[1];
+				out[2] = p[2];
+				return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		int g_meleeRequests = 0;
 
 		// ---- inputs from the link ----
 		struct Shot
@@ -498,6 +653,83 @@ namespace damage
 				it = ++it->frames > 300 ? g_watch.erase(it) : std::next(it);
 		}
 
+		if (any)
+			post_followups();
+		for (auto it = g_hitCounts.begin(); it != g_hitCounts.end();)
+			it = GetTickCount64() - it->second.last > kHitMemoryMs ? g_hitCounts.erase(it) : std::next(it);
+
+		// sword swings: what is right in front of Sam
+		for (; g_meleeRequests > 0; --g_meleeRequests)
+		{
+			if (!any || !g_hurtNpcs || sam == nullptr)
+				continue;
+			const float *cf = s.cam.col[1];
+			const double fl = std::sqrt(double(cf[0]) * cf[0] + double(cf[1]) * cf[1]);
+			if (fl < 1e-3)
+				continue;
+			const double fx = cf[0] / fl, fy = cf[1] / fl;
+			double from[3] = {s.sam.pos[0], s.sam.pos[1], s.sam.pos[2] + 1.55};
+			const double to[3] = {from[0] + fx * 3.5, from[1] + fy * 3.5, from[2]};
+			void *target = nullptr;
+			Kind target_kind = Kind::None;
+			WorldPosition at{};
+			for (int attempt = 0; attempt < 2 && target == nullptr; ++attempt)
+			{
+				physics::Hit h;
+				if (!physics::intersect_line(from, to, 54, nullptr, h) || !h.hit)
+					break;
+				if (h.entity == sam)
+				{
+					// leaving Sam's own hitbox: go on from just past it
+					const double left = std::sqrt((to[0] - h.pos[0]) * (to[0] - h.pos[0]) + (to[1] - h.pos[1]) * (to[1] - h.pos[1]));
+					if (left < 0.35)
+						break;
+					from[0] = h.pos[0] + fx * 0.3;
+					from[1] = h.pos[1] + fy * 0.3;
+					continue;
+				}
+				const Kind kind = classify_raw(h.entity);
+				if (kind == Kind::Human || kind == Kind::BT)
+				{
+					target = h.entity;
+					target_kind = kind;
+					at = {h.pos[0], h.pos[1], h.pos[2]};
+				}
+				break;
+			}
+			if (target == nullptr)
+			{
+				// nothing on the line: the nearest human/BT within reach and 60 degrees of where Sam faces
+				const WorldPosition c = {s.sam.pos[0] + fx * 1.5, s.sam.pos[1] + fy * 1.5, s.sam.pos[2] + 1.0};
+				void *found[32];
+				const int n = in_radius_raw(&c, 2.5f, found, 32);
+				double best = 1e9;
+				for (int i = 0; i < n; ++i)
+				{
+					double p[3];
+					if (found[i] == sam || !position_raw(found[i], p))
+						continue;
+					const double dx = p[0] - s.sam.pos[0], dy = p[1] - s.sam.pos[1], d = std::sqrt(dx * dx + dy * dy);
+					if (d > 3.5 || d < 1e-3 || (dx * fx + dy * fy) / d < 0.5)
+						continue;
+					const Kind kind = classify_raw(found[i]);
+					if ((kind == Kind::Human || kind == Kind::BT) && d < best)
+					{
+						best = d;
+						target = found[i];
+						target_kind = kind;
+						at = {p[0], p[1], p[2] + 1.2};
+					}
+				}
+			}
+			if (target != nullptr)
+			{
+				const float dir[3] = {float(fx), float(fy), 0.0f};
+				hurt(target, target_kind, at, dir, Source::Melee, sam);
+				++g_stats.melee_hits;
+			}
+		}
+
 		// arrows: trace each step of each projectile through DS on the bullet layer (world + character hitboxes)
 		while (!g_shots.empty())
 		{
@@ -528,7 +760,7 @@ namespace damage
 					const float l = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]) + 1e-4f;
 					for (float &v : dir)
 						v /= l;
-					hurt(h.entity, kind, {h.pos[0], h.pos[1], h.pos[2]}, dir, false, sam);
+					hurt(h.entity, kind, {h.pos[0], h.pos[1], h.pos[2]}, dir, Source::Arrow, sam);
 					++g_stats.arrow_hits;
 					// the arrow stays in whoever it hit (Minecraft coordinates)
 					char msg[160];
@@ -565,7 +797,7 @@ namespace damage
 					const float l = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]) + 1e-4f;
 					for (float &v : dir)
 						v /= l;
-					hurt(found[i], kind, {p->x, p->y, p->z + 1.0}, dir, true, sam);
+					hurt(found[i], kind, {p->x, p->y, p->z + 1.0}, dir, Source::Tnt, sam);
 					++g_stats.tnt_hits;
 				}
 			}
@@ -608,6 +840,30 @@ namespace damage
 			}
 		}
 		g_stats.ready = g_tableRead && !g_broken && g_codeOk;
+	}
+
+	void on_melee()
+	{
+		if (g_meleeRequests < 4)
+			++g_meleeRequests;
+	}
+
+	int recent_hits(RecentHit *out, int max_out, unsigned long long within_ms)
+	{
+		const ULONGLONG now = GetTickCount64();
+		int n = 0;
+		for (int i = 0; i < 8 && n < max_out; ++i)
+		{
+			const RecentHit &r = g_recent[(g_recentNext - 1 - i + 64) % 8];
+			if (r.entity != nullptr && now - r.tick <= within_ms)
+				out[n++] = r;
+		}
+		return n;
+	}
+
+	bool entity_position(void *entity, double out[3])
+	{
+		return entity != nullptr && position_raw(entity, out);
 	}
 
 	void set_hurt_npcs(bool on)
@@ -667,7 +923,7 @@ namespace damage
 		if (!ready() || g_humansOff || classify_raw(entity) != Kind::Human)
 			return false;
 		const int before = g_stats.knocked_out;
-		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, explosion, nullptr);
+		hurt(entity, Kind::Human, {at[0], at[1], at[2]}, dir, explosion ? Source::Tnt : Source::Melee, nullptr); // mob blows count like sword blows
 		return g_stats.knocked_out != before;
 	}
 
