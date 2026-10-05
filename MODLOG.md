@@ -161,3 +161,13 @@ ground from depth or Sam's feet, and only then interactions (Minecraft TNT → D
   Movement Blocker" (no characters, no baggage), both switchable in the overlay. Columns are asked again when Sam's
   height moves the tested band and, within 12 blocks of him, every 8 s. The new `colset` message gives Minecraft each
   asked column's whole state, and the mod takes away barriers it placed that are no longer solid. User: "now its good".
+- 2026-10-04 **DS's UI over Minecraft.** ReShade renders effects at presentation, over DS's HUD and pause menu. A
+  one-frame trace (`ui.cpp`, overlay button) showed that DS draws its UI into a full-screen RGBA16F target of its own
+  (188 draws in the pause menu), composites it with the scene into an RGBA8 target in a single draw, then copies that
+  into the back buffer: no draw into the back buffer separates the scene from the UI, so mid-frame `render_effects`
+  can't help. Instead, the last full-screen RGBA16F target drawn into each frame (in execution order) is bound to the
+  effects' `DSUI` texture, and `MCPassthrough.fx` lays it over Minecraft again where Minecraft covers DS's picture
+  (elsewhere DS's own composite stays untouched). The first of our add-ons loaded in the process does this for all
+  effects (`DsUiActive`). User: "interface looks good, work well".
+- 2026-10-04 DS's clip planes are given to the compositor from DS's own camera every frame. Before, only the Minecraft
+  link set them, so without it DS's depth came out 25% too near.

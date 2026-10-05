@@ -16,6 +16,7 @@
 #include "physground.h"
 #include "solid.h"
 #include "survey.h"
+#include "ui.h"
 #include "damage.h"
 #include "mobs.h"
 #include "watch.h"
@@ -312,6 +313,10 @@ namespace
 			host::start();
 		}
 		read_snapshot(); // also when effects are toggled off
+		// DS's clip planes turn its depth buffer into metres for the compositor: from DS's own camera every frame,
+		// not only while the Minecraft link is up (without them DS's surfaces came out 25% too near)
+		if (g_snap.ok && g_snap.near_plane > 0.0f && g_snap.far_plane > g_snap.near_plane)
+			compositor::set_host_planes(g_snap.near_plane, g_snap.far_plane);
 		uint32_t w = 0, h = 0;
 		runtime->get_screenshot_width_and_height(&w, &h);
 		host::frame(g_snap, int(w), int(h));
@@ -398,6 +403,7 @@ namespace
 	void on_overlay(effect_runtime *)
 	{
 		ImGui::TextUnformatted(g_status);
+		ui::overlay();
 		for (const Feature *f : {&f_rays, &f_solid, &f_damage, &f_mobs, &f_scan, &f_probe, &f_survey})
 			if (f->broken)
 				ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "'%s' hit a fault and was switched off (see dsmc.log GUARD)", f->name);
@@ -536,6 +542,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 	case DLL_PROCESS_ATTACH:
 		if (!reshade::register_addon(module))
 			return FALSE;
+		ui::install(); // DS's UI over Minecraft (one add-on per process does it)
 		{
 			wchar_t path[MAX_PATH];
 			GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -561,6 +568,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 		if (reserved == nullptr) // FreeLibrary; on process exit the link thread is already gone, joining would hang
 			host::stop();
 		rawinput::uninstall();
+		ui::uninstall();
 		compositor::unregister(module);
 		reshade::unregister_addon(module);
 		if (g_log)

@@ -11,6 +11,13 @@ texture MCOverlayTex : MCOVERLAY;
 sampler sWorld { Texture = MCWorldTex; AddressU = CLAMP; AddressV = CLAMP; };
 sampler sDepth { Texture = MCDepthTex; MinFilter = POINT; MagFilter = POINT; AddressU = CLAMP; AddressV = CLAMP; };
 sampler sOverlay { Texture = MCOverlayTex; AddressU = CLAMP; AddressV = CLAMP; };
+// DS's own UI target (found by the add-on every frame): laid over what we composite, where we cover DS's picture
+texture DsUiTex : DSUI;
+sampler sDsUi { Texture = DsUiTex; AddressU = CLAMP; AddressV = CLAMP; };
+uniform bool DsUiActive = false;
+uniform float DsUiGamma < ui_type = "drag"; ui_min = 0.2; ui_max = 3.0; ui_step = 0.01; ui_label = "DS UI gamma";
+	ui_tooltip = "How DS's UI target's colour turns into the picture's (1: as is; 0.4545: linear to sRGB)."; > = 1.0;
+uniform float DsUiStrength < ui_type = "drag"; ui_min = 0.0; ui_max = 2.0; ui_step = 0.01; ui_label = "DS UI brightness"; > = 1.0;
 
 // x = near, y = far, z = flags (1: [0,1] depth, 2: rows bottom-up, 4: reversed Z). Set by the add-on.
 uniform float3 McPlanes = float3(0.05, 2048.0, 7.0);
@@ -53,7 +60,7 @@ uniform float BloomThreshold < ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; ui_
 uniform float3 Shake = float3(0.0, 0.0, 0.0);
 uniform float PortalWarp = 0.0;
 uniform float Timer < source = "timer"; >;
-uniform int DebugView < ui_type = "combo"; ui_items = "Composite\0GTA depth (1 m bands)\0Minecraft depth (1 m bands)\0Depth difference\0"; > = 0;
+uniform int DebugView < ui_type = "combo"; ui_items = "Composite\0GTA depth (1 m bands)\0Minecraft depth (1 m bands)\0Depth difference\0DS UI target (colour | alpha)\0"; > = 0;
 uniform bool Reproject < ui_label = "Re-project to GTA's camera"; ui_tooltip = "Rotate Minecraft's (slightly older) frame onto GTA's current camera."; > = true;
 uniform float PosePrediction < ui_type = "drag"; ui_min = -2.0; ui_max = 3.0; ui_step = 0.05; ui_label = "Pose prediction (frames)";
 	ui_tooltip = "Extrapolate GTA's camera rotation by this many frames before re-projecting."; > = 0.0;
@@ -309,6 +316,18 @@ float3 PS_Final(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 		const float r = length((uv - 0.5) * float2(aspect, 1.0));
 		const float3 purple = color * float3(0.72, 0.38, 1.25) + float3(0.12, 0.0, 0.22) * (0.6 + 0.4 * sin(t * 3.0 + r * 9.0));
 		color = lerp(color, purple, saturate(PortalWarp * (0.55 + r * 0.6)));
+	}
+	// DS's UI over what we composite (DS composited it with its scene before we drew over that): where we cover
+	if (DsUiActive)
+	{
+		const float4 ui = tex2D(sDsUi, uv);
+		if (DebugView == 4)
+			return uv.x < 0.5 ? saturate(tex2D(sDsUi, float2(uv.x * 2.0, uv.y)).rgb) : tex2D(sDsUi, float2(uv.x * 2.0 - 1.0, uv.y)).aaa;
+		if (info.x > 0.001)
+		{
+			const float3 ui_rgb = pow(max(ui.rgb, 0.0), DsUiGamma) * DsUiStrength;
+			color = lerp(color, ui_rgb + color * saturate(1.0 - ui.a), saturate(info.x));
+		}
 	}
 	const float4 overlay = tex2D(sOverlay, float2(uv.x, 1.0 - uv.y)); // hand and HUD are screen-space: never shaken
 	return overlay.rgb + saturate(color) * (1.0 - overlay.a);
