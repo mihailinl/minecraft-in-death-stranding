@@ -68,6 +68,7 @@ public final class HostLink extends WebSocketServer {
 			switch (m.get("t").getAsString()) {
 				case "cam" -> HostState.update(m);
 				case "ground" -> WorldBridge.solid(ints(m.getAsJsonArray("c")));
+				case "colset" -> WorldBridge.columns(ints(m.getAsJsonArray("c")));
 				case "clear" -> WorldBridge.clearSolid();
 				case "save" -> WorldBridge.save();
 				case "samfire" -> dev.rehan.passthrough.SamFire.set(m.get("on").getAsBoolean());

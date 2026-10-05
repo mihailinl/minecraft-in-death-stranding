@@ -78,6 +78,51 @@ public final class WorldBridge {
 		});
 	}
 
+	/**
+	 * What the host's collision says each column holds, in the heights it asked: {x, z, n, (yLo, yHi, solid) x n, ...}.
+	 * Solid runs become barriers (only air is replaced); in the others, barriers we put there before are taken away
+	 * (collision that streamed in late, a structure built or gone, the host looking again from another height).
+	 */
+	public static void columns(final int[] data) {
+		MinecraftServer s = server;
+		if (s == null) {
+			return;
+		}
+
+		s.execute(() -> {
+			ServerLevel level = s.overworld();
+			BlockState barrier = Blocks.BARRIER.defaultBlockState();
+			BlockState air = Blocks.AIR.defaultBlockState();
+			BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+			placingGround = true;
+			int i = 0;
+			while (i + 2 < data.length) {
+				int x = data[i], z = data[i + 1], n = data[i + 2];
+				i += 3;
+				for (int r = 0; r < n && i + 2 < data.length; r++, i += 3) {
+					int lo = data[i], hi = data[i + 1];
+					boolean solid = data[i + 2] != 0;
+					for (int y = lo; y <= hi; y++) {
+						pos.set(x, y, z);
+						if (!level.isInWorldBounds(pos)) {
+							continue;
+						}
+						if (solid) {
+							if (level.getBlockState(pos).isAir()) {
+								level.setBlock(pos, barrier, Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+								barriers.add(pos.immutable());
+							}
+						} else if (barriers.remove(pos) && level.getBlockState(pos).is(Blocks.BARRIER)) {
+							level.setBlock(pos, air, Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+						}
+					}
+				}
+			}
+
+			placingGround = false;
+		});
+	}
+
 	/** Remove every barrier we placed (e.g. when the host teleports somewhere else). */
 	public static void clearSolid() {
 		MinecraftServer s = server;

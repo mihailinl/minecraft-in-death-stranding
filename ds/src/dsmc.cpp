@@ -15,6 +15,7 @@
 #include "physics.h"
 #include "physground.h"
 #include "solid.h"
+#include "survey.h"
 #include "damage.h"
 #include "mobs.h"
 #include "watch.h"
@@ -61,7 +62,7 @@ namespace
 	};
 	Feature f_rays{"DS collision -> Minecraft ground", false}, f_solid{"Minecraft blocks solid for Sam", false},
 		f_damage{"weapons and damage", false}, f_mobs{"mobs vs DS humans", false}, f_scan{"depth scan", false},
-		f_probe{"physics probe / test box", false};
+		f_probe{"physics probe / test box", false}, f_survey{"collision layer survey", false};
 	ULONGLONG g_readPausedUntil = 0;
 
 	template <class F>
@@ -318,6 +319,7 @@ namespace
 		guarded(f_solid, [] { solid::frame(g_snap); });
 		guarded(f_damage, [] { damage::frame(g_snap); });
 		guarded(f_mobs, [] { mobs::frame(g_snap); });
+		guarded(f_survey, [] { survey::frame(g_snap); });
 		guarded(f_scan, [&] { ground::on_present(runtime); });
 		watch::poll();
 
@@ -396,7 +398,7 @@ namespace
 	void on_overlay(effect_runtime *)
 	{
 		ImGui::TextUnformatted(g_status);
-		for (const Feature *f : {&f_rays, &f_solid, &f_damage, &f_mobs, &f_scan, &f_probe})
+		for (const Feature *f : {&f_rays, &f_solid, &f_damage, &f_mobs, &f_scan, &f_probe, &f_survey})
 			if (f->broken)
 				ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "'%s' hit a fault and was switched off (see dsmc.log GUARD)", f->name);
 		const host::Stats st = host::stats();
@@ -427,6 +429,31 @@ namespace
 		ImGui::SameLine();
 		if (ImGui::Button(watch::active() ? "watching..." : "Find FOV writer") && !watch::active() && g_snap.ok)
 			watch::start(g_snap.cam_node_ptr + 0x74, 3000);
+		{
+			// the collision copy's layers (Minecraft's barriers), and how each candidate layer does where
+			// Sam stands (truth: floor under his feet, nothing in his chest)
+			physics::Layers &ly = physics::layers();
+			int ground = int(ly.ground), solid_layer = int(ly.solid);
+			ImGui::SetNextItemWidth(90);
+			if (ImGui::InputInt("ground ray layer", &ground) && ground > 0 && ground < 127)
+				ly.ground = uint32_t(ground);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(90);
+			if (ImGui::InputInt("solid test layer", &solid_layer) && solid_layer > 0 && solid_layer < 127)
+				ly.solid = uint32_t(solid_layer);
+			survey::Row rows[survey::kLayers];
+			const unsigned samples = survey::rows(rows);
+			if (ImGui::TreeNode("survey", "Collision layers where Sam stands (%u samples)", samples))
+			{
+				for (const survey::Row &r : rows)
+				{
+					const unsigned rays = r.ok + r.above + r.below + r.miss;
+					ImGui::Text("%3u %-30s floor found %5.1f%%  above %u  below %u  none %u   chest solid %u/%u", r.layer, r.name,
+						rays ? 100.0f * r.ok / rays : 0.0f, r.above, r.below, r.miss, r.chest_solid, r.chest_tests);
+				}
+				ImGui::TreePop();
+			}
+		}
 		bool phys = physground::enabled();
 		if (ImGui::Checkbox("Ground from DS collision", &phys))
 			physground::set_enabled(phys);

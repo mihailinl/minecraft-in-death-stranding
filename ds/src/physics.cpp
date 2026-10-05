@@ -40,13 +40,13 @@ namespace physics
 		uintptr_t g_base = 0;
 		int g_faults = 0;
 
-		bool call_guarded(const double *from, const double *to, uint32_t layer, const void *ignore, Hit &out, bool &faulted)
+		bool call_guarded(const double *from, const double *to, uint32_t layer, const void *ignore, bool hierarchy, Hit &out, bool &faulted)
 		{
 			faulted = false;
 			__try
 			{
 				alignas(16) float normal[4] = {};
-				out.hit = g_intersect(from, to, layer, ignore, false, out.pos, normal, &out.f, &out.entity, &out.material);
+				out.hit = g_intersect(from, to, layer, ignore, hierarchy, out.pos, normal, &out.f, &out.entity, &out.material);
 				std::memcpy(out.normal, normal, sizeof(normal));
 				return true;
 			}
@@ -93,13 +93,20 @@ namespace physics
 		}
 	}
 
-	bool intersect_line(const double from[3], const double to[3], uint32_t layer, const void *ignore, Hit &out)
+	Layers g_layers;
+
+	Layers &layers()
+	{
+		return g_layers;
+	}
+
+	bool intersect_line(const double from[3], const double to[3], uint32_t layer, const void *ignore, Hit &out, bool ignore_hierarchy)
 	{
 		out = {};
 		if (g_intersect == nullptr || g_faults > 0 || thread_slot() == 0)
 			return false;
 		bool faulted = false;
-		const bool ok = call_guarded(from, to, layer, ignore, out, faulted);
+		const bool ok = call_guarded(from, to, layer, ignore, ignore_hierarchy, out, faulted);
 		if (faulted)
 			++g_faults;
 		return ok;

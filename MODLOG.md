@@ -151,3 +151,13 @@ ground from depth or Sam's feet, and only then interactions (Minecraft TNT → D
   (`hot` blocks). Untested in game at the time of writing.
 - **Windows**: the compositor tries the Win32 named mapping first, then Wine's `Z:\dev\shm` file.
   `ds/build.bat`, `tools/fetch_deps.ps1` and `install.ps1` are written but not yet run on Windows.
+- 2026-10-04 **Collision layers.** Barriers sometimes stayed in the wrong place, and blocks wouldn't stand on some
+  floors. Cause: layer 47 "Ray vs Static" collides only with Static, Semi Static and the navigation-mesh statics
+  (collision matrix), and building floors, player structures, chiral bridges, cliffs and invisible walls are on other
+  layers. `survey.cpp` measures it where the truth is known: under Sam's feet there is floor, and in his chest
+  nothing. Over 1741 samples, layer 47 found the floor 53% of the time, and layer 96 "DS Player Leg IK Raycast" (the
+  game's own ray for Sam's feet) 96%, with Sam ignored through the ray's ignore entity. No layer reported a sphere in
+  Sam's chest as solid (water and triggers never showed up). Now: rays down on 96, sphere tests on 34 "DS Player
+  Movement Blocker" (no characters, no baggage), both switchable in the overlay. Columns are asked again when Sam's
+  height moves the tested band and, within 12 blocks of him, every 8 s. The new `colset` message gives Minecraft each
+  asked column's whole state, and the mod takes away barriers it placed that are no longer solid. User: "now its good".
