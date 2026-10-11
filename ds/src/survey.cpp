@@ -22,6 +22,20 @@ namespace survey
 	{
 		if (!s.ok || (++g_frame & 3) != 0 || physics::thread_slot() == 0)
 			return;
+		static bool picked = false;
+		if (!picked)
+		{
+			picked = true;
+			if (physics::version() == 2)
+			{
+				// Death Stranding 2's candidates (its layer table differs)
+				const Row ds2[kLayers] = {{47, "Ray vs Static"}, {74, "DS Player Leg IK Raycast"}, {95, "Leg IK raycast"},
+					{99, "vs PlayerMovement blocker"}, {11, "Player blocker"}, {114, "Player blocker without vehicle"},
+					{102, "vs Default Character Blocker"}};
+				for (int i = 0; i < kLayers; ++i)
+					g_rows[i] = ds2[i];
+			}
+		}
 		const ULONGLONG now = GetTickCount64();
 		const double feet = s.sam.pos[2];
 		const float dt = g_prevTick ? float(now - g_prevTick) * 0.001f : 0.0f;
@@ -34,6 +48,7 @@ namespace survey
 		const double from[3] = {s.sam.pos[0], s.sam.pos[1], feet + 1.2}, to[3] = {s.sam.pos[0], s.sam.pos[1], feet - 4.0};
 		const double chest[3] = {s.sam.pos[0], s.sam.pos[1], feet + 1.0};
 		float z47 = NAN, z96 = NAN;
+		const unsigned leg_ik = physics::layer_leg_ik();
 		for (Row &r : g_rows)
 		{
 			physics::Hit h;
@@ -43,7 +58,7 @@ namespace survey
 				(!h.hit ? r.miss : dz > 0.3 ? r.above : dz < -0.3 ? r.below : r.ok)++;
 				if (r.layer == 47)
 					z47 = h.hit ? float(dz) : -99.0f;
-				if (r.layer == 96)
+				if (r.layer == leg_ik)
 					z96 = h.hit ? float(dz) : -99.0f;
 			}
 			bool called = false;
@@ -59,8 +74,8 @@ namespace survey
 		if (g_examples < 40 && !std::isnan(z47) && !std::isnan(z96) && std::fabs(z47 - z96) > 0.3f)
 		{
 			++g_examples;
-			logf("SURVEY Sam at %.2f %.2f %.2f: floor under him by layer 47 %+.2f, layer 96 %+.2f (-99: none)", s.sam.pos[0], s.sam.pos[1],
-				feet, z47, z96);
+			logf("SURVEY Sam at %.2f %.2f %.2f: floor under him by layer 47 %+.2f, layer %u (feet) %+.2f (-99: none)", s.sam.pos[0], s.sam.pos[1],
+				feet, z47, leg_ik, z96);
 		}
 		if (now >= g_nextLog)
 		{

@@ -24,9 +24,23 @@ namespace ui
 		struct __declspec(uuid("5d0b8c1e-7a43-4f0e-9a51-3c2f8e1d6b47")) CmdData
 		{
 			resource target = {0};    // the bound render target (one of them bound)
-			bool ui_like = false;     // full-screen RGBA16F
+			bool ui_like = false;     // full-screen, alone, no depth: RGBA16F (DS1) / RGBA8 (DS2) / RGB10A2
 			bool back_buffer = false; // the swap chain's
-			resource ui_candidate = {0};
+			// draws into each UI-like target in this list (the UI is the one most drawn into in a frame)
+			struct UiDraws
+			{
+				uint64_t target;
+				unsigned draws;
+			} ui_draws[4] = {};
+			// the scene's viewport into a full-screen depth buffer (upscaling renders smaller into its corner)
+			uint64_t dsv_last = 0;
+			bool dsv_full = false, depth_full = false;
+			float vp_w = 0.0f, vp_h = 0.0f;
+			struct Vp
+			{
+				float w, h;
+				unsigned draws;
+			} vps[4] = {};
 			// trace: this list's lines (a list is recorded by one thread), and draws/dispatches since the last line
 			std::vector<std::string> trace;
 			unsigned draws = 0, dispatches = 0;
@@ -39,14 +53,22 @@ namespace ui
 		uint32_t g_backBufferCount = 0;
 		uint32_t g_bbWidth = 0, g_bbHeight = 0;
 
-		// DS's UI target: the last full-screen RGBA16F target drawn into in a frame, in execution order (DS's UI,
-		// drawn right before it is composited with the scene)
+		// DS's UI target: the full-screen target (alone, no depth; RGBA16F in DS1, RGBA8 sRGB in DS2) drawn into most in a
+		// frame: DS's UI, before it is composited with the scene in one pass
 		std::atomic<bool> g_uiOver{true};
 		std::atomic<uint64_t> g_frameUi{0};
+		std::mutex g_uiDrawsLock;
+		CmdData::UiDraws g_frameUiDraws[8] = {};
 		std::mutex g_uiLock;
 		resource g_uiRes = {0};
 		resource_view g_uiSrv = {0};
 		device *g_uiDevice = nullptr;
+
+		// how much of DS's depth buffer the scene uses, from the viewport most of the frame's draws into a full-screen
+		// depth buffer used: the effects scale their depth lookups by it (DepthUvScale)
+		std::mutex g_vpLock;
+		CmdData::Vp g_frameVps[8] = {};
+		std::atomic<float> g_depthScaleX{1.0f}, g_depthScaleY{1.0f};
 
 		// one-frame trace: armed by the overlay, records from the next presentation to the one after
 		std::atomic<int> g_trace{0}; // 0 idle, 1 armed, 2 recording
@@ -80,6 +102,22 @@ namespace ui
 				return;
 			d->target = {0};
 			d->ui_like = d->back_buffer = false;
+			// the depth buffer bound: full-screen? (looked up only when it changes)
+			if (dsv.handle != d->dsv_last)
+			{
+				d->dsv_last = dsv.handle;
+				d->dsv_full = false;
+				if (dsv.handle != 0)
+				{
+					device *dev = cmd_list->get_device();
+					if (const resource dr = dev->get_resource_from_view(dsv); dr.handle != 0)
+					{
+						const resource_desc dd = dev->get_resource_desc(dr);
+						d->dsv_full = dd.type == resource_type::texture_2d && dd.texture.width == g_bbWidth && dd.texture.height == g_bbHeight;
+					}
+				}
+			}
+			d->depth_full = dsv.handle != 0 && d->dsv_full && count > 0;
 			const bool tracing = g_trace == 2;
 			if (!g_uiOver && !tracing)
 				return; // nothing asked for: don't look up views (every bind of every pass)
@@ -94,8 +132,11 @@ namespace ui
 				desc = dev->get_resource_desc(r);
 				d->target = r;
 				d->back_buffer = is_back_buffer(r);
-				d->ui_like = count == 1 && desc.type == resource_type::texture_2d && desc.texture.width == g_bbWidth &&
-					desc.texture.height == g_bbHeight && format_to_typeless(desc.texture.format) == format::r16g16b16a16_typeless;
+				const format tl = format_to_typeless(desc.texture.format);
+				d->ui_like = count == 1 && dsv.handle == 0 && !d->back_buffer && desc.type == resource_type::texture_2d &&
+					desc.texture.width == g_bbWidth && desc.texture.height == g_bbHeight &&
+					(tl == format::r16g16b16a16_typeless || tl == format::r8g8b8a8_typeless || tl == format::b8g8r8a8_typeless ||
+						tl == format::r10g10b10a2_typeless);
 			}
 			if (tracing && d->trace.size() < kTraceLines)
 			{
@@ -117,7 +158,30 @@ namespace ui
 			if (d == nullptr)
 				return;
 			if (d->ui_like)
-				d->ui_candidate = d->target;
+				for (auto &u : d->ui_draws)
+				{
+					if (u.draws == 0)
+						u.target = d->target.handle;
+					if (u.target == d->target.handle)
+					{
+						++u.draws;
+						break;
+					}
+				}
+			if (d->depth_full && d->vp_w > 0.0f)
+			{
+				// count this draw for its viewport
+				for (auto &v : d->vps)
+				{
+					if (v.draws == 0)
+						v.w = d->vp_w, v.h = d->vp_h;
+					if (v.w == d->vp_w && v.h == d->vp_h)
+					{
+						++v.draws;
+						break;
+					}
+				}
+			}
 			if (g_trace == 2)
 			{
 				++d->draws;
@@ -140,11 +204,26 @@ namespace ui
 		{
 			if (CmdData *d = cmd_list->get_private_data<CmdData>())
 			{
-				d->target = d->ui_candidate = {0};
+				d->target = {0};
+				for (auto &u : d->ui_draws)
+					u = {};
 				d->ui_like = d->back_buffer = false;
+				d->dsv_last = 0;
+				d->dsv_full = d->depth_full = false;
+				d->vp_w = d->vp_h = 0.0f;
+				for (auto &v : d->vps)
+					v = {};
 				d->trace.clear();
 				d->draws = d->dispatches = 0;
 			}
+		}
+
+		void on_bind_viewports(command_list *cmd_list, uint32_t first, uint32_t count, const viewport *viewports)
+		{
+			if (first != 0 || count == 0)
+				return;
+			if (CmdData *d = cmd_list->get_private_data<CmdData>())
+				d->vp_w = viewports[0].width, d->vp_h = viewports[0].height;
 		}
 
 		void on_bind_render_targets(command_list *cmd_list, uint32_t count, const resource_view *rtvs, resource_view dsv)
@@ -224,8 +303,46 @@ namespace ui
 			CmdData *d = cmd_list->get_private_data<CmdData>();
 			if (d == nullptr)
 				return;
-			if (d->ui_candidate.handle != 0)
-				g_frameUi = d->ui_candidate.handle; // the last executed wins: the frame's UI, just before compositing
+			if (d->ui_draws[0].draws != 0)
+			{
+				std::lock_guard<std::mutex> lock(g_uiDrawsLock);
+				for (auto &u : d->ui_draws)
+				{
+					if (u.draws == 0)
+						break;
+					for (auto &f : g_frameUiDraws)
+					{
+						if (f.draws == 0)
+							f.target = u.target;
+						if (f.target == u.target)
+						{
+							f.draws += u.draws;
+							break;
+						}
+					}
+					u = {};
+				}
+			}
+			if (d->vps[0].draws != 0)
+			{
+				std::lock_guard<std::mutex> lock(g_vpLock);
+				for (auto &v : d->vps)
+				{
+					if (v.draws == 0)
+						break;
+					for (auto &f : g_frameVps)
+					{
+						if (f.draws == 0)
+							f.w = v.w, f.h = v.h;
+						if (f.w == v.w && f.h == v.h)
+						{
+							f.draws += v.draws;
+							break;
+						}
+					}
+					v = {};
+				}
+			}
 			if (g_trace != 2)
 				return;
 			trace_flush_counts(*d);
@@ -262,11 +379,14 @@ namespace ui
 
 		void set_active_everywhere(effect_runtime *runtime, bool active)
 		{
-			runtime->enumerate_uniform_variables(nullptr, [active](effect_runtime *rt, effect_uniform_variable v) {
+			const float sx = g_depthScaleX, sy = g_depthScaleY;
+			runtime->enumerate_uniform_variables(nullptr, [active, sx, sy](effect_runtime *rt, effect_uniform_variable v) {
 				char name[32] = "";
 				rt->get_uniform_variable_name(v, name);
 				if (std::strcmp(name, "DsUiActive") == 0)
 					rt->set_uniform_value_bool(v, active);
+				else if (std::strcmp(name, "DepthUvScale") == 0)
+					rt->set_uniform_value_float(v, sx, sy);
 			});
 		}
 
@@ -286,7 +406,8 @@ namespace ui
 						device *dev = runtime->get_device();
 						const resource r = {want};
 						const resource_desc desc = dev->get_resource_desc(r);
-						if (dev->create_resource_view(r, resource_usage::shader_resource, resource_view_desc(format_to_default_typed(desc.texture.format)), &g_uiSrv))
+						// its stored values as they are (an sRGB format read without decoding: the picture is display-encoded too)
+						if (dev->create_resource_view(r, resource_usage::shader_resource, resource_view_desc(format_to_default_typed(desc.texture.format, 0)), &g_uiSrv))
 						{
 							g_uiRes = r;
 							g_uiDevice = dev;
@@ -333,6 +454,33 @@ namespace ui
 				runtime->get_screenshot_width_and_height(&g_bbWidth, &g_bbHeight);
 			}
 			g_lastFrameBbDraws = g_bbDraws.exchange(0);
+			{
+				// the frame's UI: the UI-like target drawn into most (the composite after it gets one draw)
+				std::lock_guard<std::mutex> lock(g_uiDrawsLock);
+				const CmdData::UiDraws *best = nullptr;
+				for (const auto &f : g_frameUiDraws)
+					if (f.draws != 0 && (best == nullptr || f.draws > best->draws))
+						best = &f;
+				if (best != nullptr && best->draws >= 3)
+					g_frameUi = best->target;
+				for (auto &f : g_frameUiDraws)
+					f = {};
+			}
+			{
+				// the scene's viewport this frame -> the depth buffer's used part
+				std::lock_guard<std::mutex> lock(g_vpLock);
+				const CmdData::Vp *best = nullptr;
+				for (const auto &f : g_frameVps)
+					if (f.draws != 0 && (best == nullptr || f.draws > best->draws))
+						best = &f;
+				if (best != nullptr && best->draws >= 20 && g_bbWidth != 0 && g_bbHeight != 0)
+				{
+					g_depthScaleX = std::clamp(best->w / float(g_bbWidth), 0.2f, 1.0f);
+					g_depthScaleY = std::clamp(best->h / float(g_bbHeight), 0.2f, 1.0f);
+				}
+				for (auto &f : g_frameVps)
+					f = {};
+			}
 			const int t = g_trace;
 			if (t == 1)
 			{
@@ -369,6 +517,7 @@ namespace ui
 		reshade::register_event<reshade::addon_event::destroy_command_list>(on_destroy_command_list);
 		reshade::register_event<reshade::addon_event::reset_command_list>(on_reset_command_list);
 		reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(on_bind_render_targets);
+		reshade::register_event<reshade::addon_event::bind_viewports>(on_bind_viewports);
 		reshade::register_event<reshade::addon_event::begin_render_pass>(on_begin_render_pass);
 		reshade::register_event<reshade::addon_event::draw>(on_draw);
 		reshade::register_event<reshade::addon_event::draw_indexed>(on_draw_indexed);
@@ -402,6 +551,8 @@ namespace ui
 			g_uiOver = over;
 		ImGui::SameLine();
 		ImGui::TextDisabled(g_uiSrv.handle ? "(UI target found)" : "(no UI target yet)");
+		ImGui::SameLine();
+		ImGui::TextDisabled("depth buffer used %.0f%% x %.0f%%", g_depthScaleX.load() * 100.0f, g_depthScaleY.load() * 100.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(g_trace ? "tracing..." : "Trace one frame (log: UITRACE)") && g_trace == 0)
 			g_trace = 1;

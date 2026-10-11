@@ -299,6 +299,32 @@ namespace
 		ground::on_destroy(runtime);
 	}
 
+	// DS2: once per game frame on its update thread (see physics::install_tick): its own snapshot, then the
+	// physics-asking features
+	game::Snapshot g_tickSnap;
+	ULONGLONG g_tickPausedUntil = 0;
+
+	void game_tick()
+	{
+		if (!g_resolved || GetTickCount64() < g_tickPausedUntil)
+			return;
+		if (!guard::run("game tick: camera read", [] { game::read(g_tickSnap); }) || !g_tickSnap.ok)
+		{
+			g_tickPausedUntil = GetTickCount64() + 2000;
+			return;
+		}
+		guarded(f_rays, [] { physground::frame(g_tickSnap); });
+		guarded(f_survey, [] { survey::frame(g_tickSnap); });
+		static ULONGLONG next = 0;
+		if (GetTickCount64() >= next)
+		{
+			next = GetTickCount64() + 5000;
+			char tls[200];
+			physics::describe_thread(tls, sizeof(tls));
+			logf("TICK game update %s", tls);
+		}
+	}
+
 	void on_present(effect_runtime *runtime)
 	{
 		++g_frame;
@@ -320,11 +346,27 @@ namespace
 		uint32_t w = 0, h = 0;
 		runtime->get_screenshot_width_and_height(&w, &h);
 		host::frame(g_snap, int(w), int(h));
-		guarded(f_rays, [] { physground::frame(g_snap); });
-		guarded(f_solid, [] { solid::frame(g_snap); });
-		guarded(f_damage, [] { damage::frame(g_snap); });
-		guarded(f_mobs, [] { mobs::frame(g_snap); });
-		guarded(f_survey, [] { survey::frame(g_snap); });
+		// DS2: the collision copy runs on the game's update thread (game_tick), the only place its physics can be asked
+		if (game::version() == 2)
+		{
+			static bool hooked = false;
+			if (!hooked)
+			{
+				hooked = true;
+				logf("DS2 game tick hook: %s", physics::install_tick(game_tick) ? "installed" : "FAILED (code mismatch)");
+			}
+		}
+		else
+			guarded(f_rays, [] { physground::frame(g_snap); });
+		// Minecraft blocks solid for Sam, damage and the mobs' fights use Death Stranding (1) engine code only
+		if (game::version() == 1)
+		{
+			guarded(f_solid, [] { solid::frame(g_snap); });
+			guarded(f_damage, [] { damage::frame(g_snap); });
+			guarded(f_mobs, [] { mobs::frame(g_snap); });
+		}
+		if (game::version() == 1)
+			guarded(f_survey, [] { survey::frame(g_snap); });
 		guarded(f_scan, [&] { ground::on_present(runtime); });
 		watch::poll();
 
@@ -397,6 +439,9 @@ namespace
 		{
 			next = GetTickCount64() + 5000;
 			log_snapshot("TICK");
+			char tls[200];
+			physics::describe_thread(tls, sizeof(tls));
+			logf("TICK present %s", tls);
 		}
 	}
 
@@ -565,6 +610,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 		reshade::register_overlay("DSMC", on_overlay);
 		break;
 	case DLL_PROCESS_DETACH:
+		physics::uninstall_tick();
 		if (reserved == nullptr) // FreeLibrary; on process exit the link thread is already gone, joining would hang
 			host::stop();
 		rawinput::uninstall();

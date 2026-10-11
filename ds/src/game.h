@@ -1,11 +1,14 @@
 #pragma once
-// Death Stranding Director's Cut (Steam build 13300582) memory reader.
+// Death Stranding Director's Cut (Steam build 13300582) and Death Stranding 2 memory reader.
 //
 // Everything here comes from the game's own script exports (Decima "ExportedSymbols"):
 //   DSPlayerEntity::sExportedGetLocalDSPlayerEntity  ->  *(*(g_PlayerManager) + 0x48) + 0x70
 //   DSCameraInterface::sExportedGetCameraPosition    ->  *(*(g_PlayerManager) + 0x48) + 0xd0 (a camera controller),
 //                                                        whose +0x20 is a Camera (WorldNode) with its transform at +0x20
 // Sam (DSPlayerEntity) keeps his transform in Entity::Orientation @200, per the game's RTTI.
+// Death Stranding 2: Player_sExportedGetLocalPlayer -> *(*(mgr) + 0x48); Sam = *(player + 0x48), Orientation @0xE8;
+// camera controller *(player + 0xc8), its Camera *(+0x18), transform at +0x20, NearPlane/FarPlane/FieldOfView/
+// ViewConeAspect at +0x64.. (RTTI dump of DS2.exe).
 // The manager global and the slot key are taken from the GetLocalDSPlayerEntity body by pattern, so nothing
 // version-specific is baked in except the field offsets the exports themselves use.
 #include <cstddef>
@@ -31,8 +34,13 @@ namespace game
 		uintptr_t cam_ptr = 0, cam_node_ptr = 0, sam_ptr = 0;
 	};
 
-	/// Finds the player manager global; false if this build doesn't match the expected code.
+	/// Finds the player manager global; false if this build doesn't match the expected code. Recognises Death
+	/// Stranding Director's Cut (Steam build 13300582) and Death Stranding 2 (Steam, PE timestamp 2026-06-25).
 	bool resolve(char *status, size_t status_size);
+	/// 1: Death Stranding (Director's Cut), 2: Death Stranding 2 (after resolve()).
+	int version();
+	/// Entity::Orientation's offset in an Entity (DS1 0xC8, DS2 0xE8).
+	size_t entity_orientation();
 	/// Reads the camera and Sam; never faults (SEH-guarded), returns snapshot.ok.
 	bool read(Snapshot &out);
 

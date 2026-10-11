@@ -6,6 +6,10 @@
 // convention are right. Behind scene geometry (depth test against DS's reversed-Z buffer) a pin is drawn dashed.
 #include "ReShade.fxh"
 
+// The part of DS's depth buffer the scene was drawn into (set by the add-on: under upscaling, e.g. FSR in
+// Death Stranding 2, the scene is rendered smaller into the top-left of a full-size buffer); 1 at native resolution
+uniform float2 DepthUvScale = float2(1.0, 1.0);
+
 uniform float2 DsmcPlanes; // near, far from CameraEntity
 uniform float4 PinV0; uniform float4 TopV0;
 uniform float4 PinV1; uniform float4 TopV1;
@@ -31,7 +35,7 @@ uniform float Timer < source = "timer"; >;
 
 float scene_view_z(float2 uv)
 {
-	float d = tex2Dlod(ReShade::DepthBuffer, float4(uv, 0, 0)).x; // reversed Z: 1 near, 0 far
+	float d = tex2Dlod(ReShade::DepthBuffer, float4(uv * DepthUvScale, 0, 0)).x; // reversed Z: 1 near, 0 far
 	float n = max(DsmcPlanes.x, 1e-3), f = max(DsmcPlanes.y, n + 1.0);
 	return n * f / (d * (f - n) + n);
 }

@@ -5,6 +5,10 @@
 // overlay: Minecraft's hand, HUD and screens, always on top.
 #include "ReShade.fxh"
 
+// The part of DS's depth buffer the scene was drawn into (set by the add-on: under upscaling, e.g. FSR in
+// Death Stranding 2, the scene is rendered smaller into the top-left of a full-size buffer); 1 at native resolution
+uniform float2 DepthUvScale = float2(1.0, 1.0);
+
 texture MCWorldTex : MCWORLD;
 texture MCDepthTex : MCDEPTH;
 texture MCOverlayTex : MCOVERLAY;
@@ -153,7 +157,7 @@ void PS_Composite(float4 pos : SV_Position, float2 uv : TEXCOORD, out float4 out
 	// Where this GTA pixel's view ray lands in Minecraft's frame.
 	float2 muv = ouv;
 	bool inside = true;
-	const float zh = host_linear(tex2Dlod(ReShade::DepthBuffer, float4(uv, 0, 0)).x);
+	const float zh = host_linear(tex2Dlod(ReShade::DepthBuffer, float4(uv * DepthUvScale, 0, 0)).x);
 	// how far behind GTA's surface Minecraft may still show: more where that surface is seen at a grazing angle
 	const float allow = min(DepthBias + SlopeBias * abs(ddy(zh)), max(MaxBias, DepthBias));
 	float zm = 1e9;

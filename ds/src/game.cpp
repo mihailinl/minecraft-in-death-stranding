@@ -26,6 +26,36 @@ namespace game
 		using SetSubjectiveFn = void (*)(bool, float);
 		SetSubjectiveFn g_setSubjective = nullptr;
 
+		// Death Stranding 2 (Steam, PE timestamp 2026-06-25): Player_sExportedGetLocalPlayer(int):
+		//   mov [rsp+8],ecx; sub rsp,58h; mov edx,ecx; mov rcx,[rip+mgr]; test rcx,rcx; jnz +7; xor eax,eax; add rsp,58h;
+		//   ret; test edx,edx; jnz +10h; lea rdx,[rip+key]; add rsp,58h; jmp lookup
+		const int kPattern2[] = {
+			0x89, 0x4C, 0x24, 0x08, 0x48, 0x83, 0xEC, 0x58, 0x8B, 0xD1, 0x48, 0x8B, 0x0D, -1, -1, -1, -1, 0x48, 0x85, 0xC9, 0x75, 0x07, 0x33,
+			0xC0, 0x48, 0x83, 0xC4, 0x58, 0xC3, 0x85, 0xD2, 0x75, 0x10, 0x48, 0x8D, 0x15, -1, -1, -1, -1, 0x48, 0x83, 0xC4, 0x58, 0xE9};
+		// DSCameraService::SetEnableForceSubjectiveCameraMode body (rcx unused, dl on, xmm2 blend):
+		//   mov [rsp+8],rbx; push rdi; sub rsp,30h; mov rdi,[rip+service]; vmovaps [rsp+20h],xmm6; vmovaps xmm6,xmm2;
+		//   lea rbx,[rdi+350h]; mov rcx,rbx; test dl,dl; jz +3Eh; call [rip+AcquireSRWLockExclusive]
+		const int kSubjectivePattern2[] = {
+			0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0x3D, -1, -1, -1, -1, 0xC5, 0xF8, 0x29, 0x74, 0x24, 0x20,
+			0xC5, 0xF8, 0x28, 0xF2, 0x48, 0x8D, 0x9F, 0x50, 0x03, 0x00, 0x00, 0x48, 0x8B, 0xCB, 0x84, 0xD2, 0x74, 0x3E, 0xFF, 0x15};
+		using SetSubjectiveFn2 = void (*)(void *, bool, float);
+		SetSubjectiveFn2 g_setSubjective2 = nullptr;
+
+		// where things are, per game (see game.h)
+		struct Layout
+		{
+			int version;
+			uint32_t player_slots;  // manager -> its local players
+			uint32_t player_camera; // Player -> camera controller
+			uint32_t camera_node;   // camera controller -> Camera (WorldNode)
+			uint32_t player_entity; // Player -> its entity (Sam)
+			uint32_t orientation;   // Entity::Orientation
+			uint32_t node_transform, near_plane, far_plane, fov, aspect; // Camera
+		};
+		constexpr Layout kDS1 = {1, 0x48, 0xd0, 0x20, 0x70, 0xC8, 0x20, 0x6C, 0x70, 0x74, 0x78};
+		constexpr Layout kDS2 = {2, 0x48, 0xc8, 0x18, 0x48, 0xE8, 0x20, 0x64, 0x68, 0x6C, 0x70};
+		Layout g_layout = kDS1;
+
 		template <size_t N>
 		const uint8_t *find_pattern(const uint8_t *begin, size_t size, const int (&pattern)[N])
 		{
@@ -53,25 +83,26 @@ namespace game
 				const uintptr_t manager = *reinterpret_cast<const uintptr_t *>(g_manager_global);
 				if (!plausible(manager))
 					return false;
-				const uintptr_t player = *reinterpret_cast<const uintptr_t *>(manager + 0x48 + 8 * uintptr_t(g_slot));
+				const Layout &L = g_layout;
+				const uintptr_t player = *reinterpret_cast<const uintptr_t *>(manager + L.player_slots + 8 * uintptr_t(g_slot));
 				if (!plausible(player))
 					return false;
-				const uintptr_t cam = *reinterpret_cast<const uintptr_t *>(player + 0xd0);
-				const uintptr_t sam = *reinterpret_cast<const uintptr_t *>(player + 0x70);
+				const uintptr_t cam = *reinterpret_cast<const uintptr_t *>(player + L.player_camera);
+				const uintptr_t sam = *reinterpret_cast<const uintptr_t *>(player + L.player_entity);
 				if (!plausible(cam) || !plausible(sam))
 					return false;
-				// camera controller -> Camera (WorldNode): WorldTransform @0x20, then NearPlane @0x6C, FarPlane @0x70,
-				// FieldOfView @0x74, ViewConeAspect @0x78 (RTTI "Camera", members start at 96 = 0x20 + 0x3C + pad)
-				const uintptr_t cam_node = *reinterpret_cast<const uintptr_t *>(cam + 0x20);
+				// camera controller -> Camera (WorldNode): its WorldTransform, then NearPlane, FarPlane, FieldOfView,
+				// ViewConeAspect (RTTI "Camera")
+				const uintptr_t cam_node = *reinterpret_cast<const uintptr_t *>(cam + L.camera_node);
 				if (!plausible(cam_node))
 					return false;
-				std::memcpy(&s.cam, reinterpret_cast<const void *>(cam_node + 0x20), 0x3C);
-				s.near_plane = *reinterpret_cast<const float *>(cam_node + 0x6C);
-				s.far_plane = *reinterpret_cast<const float *>(cam_node + 0x70);
-				s.fov = *reinterpret_cast<const float *>(cam_node + 0x74);
-				s.view_aspect = *reinterpret_cast<const float *>(cam_node + 0x78);
-				// Sam is a DSPlayerEntity: Entity::Orientation (WorldTransform) @200
-				std::memcpy(&s.sam, reinterpret_cast<const void *>(sam + 200), 0x3C);
+				std::memcpy(&s.cam, reinterpret_cast<const void *>(cam_node + L.node_transform), 0x3C);
+				s.near_plane = *reinterpret_cast<const float *>(cam_node + L.near_plane);
+				s.far_plane = *reinterpret_cast<const float *>(cam_node + L.far_plane);
+				s.fov = *reinterpret_cast<const float *>(cam_node + L.fov);
+				s.view_aspect = *reinterpret_cast<const float *>(cam_node + L.aspect);
+				// Sam is a DSPlayerEntity: Entity::Orientation (WorldTransform)
+				std::memcpy(&s.sam, reinterpret_cast<const void *>(sam + L.orientation), 0x3C);
 				auto rva = [](uintptr_t vtbl) -> uint64_t { return vtbl >= g_base && vtbl < g_end ? vtbl - g_base : 0; };
 				s.cam_vtbl_rva = rva(*reinterpret_cast<const uintptr_t *>(cam));
 				s.cam_node_vtbl_rva = rva(*reinterpret_cast<const uintptr_t *>(cam_node));
@@ -96,22 +127,40 @@ namespace game
 		g_base = uintptr_t(base);
 		g_end = g_base + nt->OptionalHeader.SizeOfImage;
 		const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
-		const uint8_t *hit = nullptr;
-		for (unsigned i = 0; i < nt->FileHeader.NumberOfSections && hit == nullptr; ++i, ++sec)
+		const uint8_t *hit = nullptr, *hit2 = nullptr;
+		for (unsigned i = 0; i < nt->FileHeader.NumberOfSections && hit == nullptr && hit2 == nullptr; ++i, ++sec)
 			if (std::memcmp(sec->Name, ".text", 6) == 0)
 			{
-				hit = find_pattern(base + sec->VirtualAddress, sec->Misc.VirtualSize, kPattern);
-				g_setSubjective = reinterpret_cast<SetSubjectiveFn>(
-					const_cast<uint8_t *>(find_pattern(base + sec->VirtualAddress, sec->Misc.VirtualSize, kSubjectivePattern)));
+				const uint8_t *text = base + sec->VirtualAddress;
+				const size_t size = sec->Misc.VirtualSize;
+				hit = find_pattern(text, size, kPattern);
+				if (hit != nullptr)
+					g_setSubjective = reinterpret_cast<SetSubjectiveFn>(const_cast<uint8_t *>(find_pattern(text, size, kSubjectivePattern)));
+				else if ((hit2 = find_pattern(text, size, kPattern2)) != nullptr)
+					g_setSubjective2 = reinterpret_cast<SetSubjectiveFn2>(const_cast<uint8_t *>(find_pattern(text, size, kSubjectivePattern2)));
 			}
-		if (hit == nullptr)
+		const uint8_t *key = nullptr;
+		if (hit != nullptr)
 		{
-			std::snprintf(status, status_size, "GetLocalDSPlayerEntity pattern not found (different game build?)");
+			// Death Stranding (Director's Cut): GetLocalDSPlayerEntity
+			g_layout = kDS1;
+			g_manager_global = uintptr_t(hit + 11) + *reinterpret_cast<const int32_t *>(hit + 7);
+			key = hit + 30 + *reinterpret_cast<const int32_t *>(hit + 26);
+		}
+		else if (hit2 != nullptr)
+		{
+			// Death Stranding 2: Player_sExportedGetLocalPlayer
+			g_layout = kDS2;
+			hit = hit2;
+			g_manager_global = uintptr_t(hit + 17) + *reinterpret_cast<const int32_t *>(hit + 13);
+			key = hit + 40 + *reinterpret_cast<const int32_t *>(hit + 36);
+		}
+		else
+		{
+			std::snprintf(status, status_size, "local player pattern not found (different game build?)");
 			return false;
 		}
-		g_manager_global = uintptr_t(hit + 11) + *reinterpret_cast<const int32_t *>(hit + 7);
-		// the lookup's fast path: key = {slot, 1, 2, nullptr} -> manager->slots[slot] at +0x48
-		const uint8_t *key = hit + 30 + *reinterpret_cast<const int32_t *>(hit + 26);
+		// the lookup's fast path: key = {slot, 1, 2, nullptr} -> manager->slots[slot]
 		const int32_t k0 = *reinterpret_cast<const int32_t *>(key), k1 = *reinterpret_cast<const int32_t *>(key + 4),
 					  k2 = *reinterpret_cast<const int32_t *>(key + 8);
 		const uint64_t k3 = *reinterpret_cast<const uint64_t *>(key + 16);
@@ -121,9 +170,9 @@ namespace game
 			return false;
 		}
 		g_slot = k0;
-		std::snprintf(status, status_size, "ok: GetLocalDSPlayerEntity rva %llx, manager global rva %llx, slot %d, first-person export %s",
-			(unsigned long long)(uintptr_t(hit) - g_base), (unsigned long long)(g_manager_global - g_base), g_slot,
-			g_setSubjective ? "found" : "missing");
+		std::snprintf(status, status_size, "ok: Death Stranding%s, local player rva %llx, manager global rva %llx, slot %d, first-person export %s",
+			g_layout.version == 2 ? " 2" : "", (unsigned long long)(uintptr_t(hit) - g_base), (unsigned long long)(g_manager_global - g_base), g_slot,
+			g_setSubjective || g_setSubjective2 ? "found" : "missing");
 		return true;
 	}
 
@@ -133,7 +182,7 @@ namespace game
 			return false;
 		__try
 		{
-			*reinterpret_cast<float *>(snap.cam_node_ptr + 0x74) = degrees;
+			*reinterpret_cast<float *>(snap.cam_node_ptr + g_layout.fov) = degrees;
 			return true;
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
@@ -144,10 +193,23 @@ namespace game
 
 	bool set_first_person(bool on, float blend_seconds)
 	{
-		if (g_setSubjective == nullptr)
+		if (g_setSubjective != nullptr)
+			g_setSubjective(on, blend_seconds);
+		else if (g_setSubjective2 != nullptr)
+			g_setSubjective2(nullptr, on, blend_seconds);
+		else
 			return false;
-		g_setSubjective(on, blend_seconds);
 		return true;
+	}
+
+	int version()
+	{
+		return g_layout.version;
+	}
+
+	size_t entity_orientation()
+	{
+		return g_layout.orientation;
 	}
 
 	bool read(Snapshot &out)

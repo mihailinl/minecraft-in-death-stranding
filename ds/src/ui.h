@@ -1,8 +1,9 @@
 #pragma once
 // DS's UI over what add-ons composite into DS's picture. ReShade renders effects at presentation, on top of
-// everything the game drew, its HUD and pause menu included. DS draws its UI into a full-screen RGBA16F target of its
-// own and composites it with the scene in a single pass (traced: no draw into the back buffer separates the two), so
-// that target is found every frame and bound to every effect's DSUI texture; effects lay it over what they drew
+// everything the game drew, its HUD and pause menu included. DS draws its UI into a full-screen target of its own
+// (RGBA16F in Death Stranding, RGBA8 sRGB in Death Stranding 2) and composites it with the scene in a single pass
+// (traced: no draw into the back buffer separates the two), so that target (the one drawn into most) is found every
+// frame and bound to every effect's DSUI texture; effects lay it over what they drew
 // (where they cover DS's picture) when their DsUiActive uniform is set.
 // Any number of add-ons may compile this in: one of them per process does the work, for all effects.
 // Also here: a one-frame trace (overlay button) of how DS draws into full-screen targets and the back buffer.

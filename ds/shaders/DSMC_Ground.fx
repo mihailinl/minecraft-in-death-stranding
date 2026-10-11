@@ -4,11 +4,15 @@
 // walls and rocks to build on. Draws nothing on screen.
 #include "ReShade.fxh"
 
+// The part of DS's depth buffer the scene was drawn into (set by the add-on: under upscaling, e.g. FSR in
+// Death Stranding 2, the scene is rendered smaller into the top-left of a full-size buffer); 1 at native resolution
+uniform float2 DepthUvScale = float2(1.0, 1.0);
+
 texture DsmcGroundTex { Width = 256; Height = 144; Format = R32F; };
 
 float PS_GroundScan(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
-	return tex2Dlod(ReShade::DepthBuffer, float4(uv, 0, 0)).x;
+	return tex2Dlod(ReShade::DepthBuffer, float4(uv * DepthUvScale, 0, 0)).x;
 }
 
 technique DSMC_Ground < ui_tooltip = "Scans DS's depth for Minecraft's collision (no visible output)."; >

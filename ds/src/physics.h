@@ -25,6 +25,10 @@ namespace physics
 	constexpr uint32_t kLayerPlayerMovementBlocker = 34;
 	constexpr uint32_t kLayerHumanoidRaycast = 14;
 	constexpr uint32_t kLayerPlayerLegIK = 96;
+	// Death Stranding 2 (Jolt): the same "Ray vs Static" (47), "Humanoid raycast movement" (14), "Foot placement" (12);
+	// "DS Player Leg IK Raycast" is 74; "DS Player Movement Blocker" is gone: "vs PlayerMovement blocker" (99) for now
+	// (survey.cpp decides)
+	constexpr uint32_t kLayerPlayerLegIK2 = 74, kLayerPlayerMovementBlocker2 = 99;
 
 	/// Which layers the collision copy (Minecraft's barriers) asks (switchable in the overlay).
 	struct Layers
@@ -56,4 +60,15 @@ namespace physics
 	bool intersect_sphere(const double centre[3], float radius, uint32_t layer, bool &called);
 	/// How many calls faulted (SEH): any at all means don't call from this thread.
 	int faults();
+	/// Which game the physics code matched (1: Death Stranding, 2: Death Stranding 2), after resolve().
+	int version();
+	/// Death Stranding 2: run `fn` on the game's update thread once per game frame, right after its in-game update
+	/// (which steps the physics): the thread DS2's physics queries can be made from. The Present thread can't (no
+	/// physics context there, and queries must not overlap Jolt's step). False on Death Stranding (1) or a mismatch.
+	bool install_tick(void (*fn)());
+	void uninstall_tick();
+	/// The calling thread's game TLS as the physics gate sees it (for the log).
+	void describe_thread(char *out, size_t size);
+	/// "DS Player Leg IK Raycast" in this game (96 / 74).
+	uint32_t layer_leg_ik();
 }
