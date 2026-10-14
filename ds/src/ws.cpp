@@ -10,6 +10,7 @@ void WsClient::start(const char *host, int port)
 {
 	m_host = host;
 	m_port = port;
+	m_stop = false; // a client stopped before (its device went) starts again
 	WSADATA wsa;
 	WSAStartup(MAKEWORD(2, 2), &wsa);
 	m_thread = std::thread([this] { run(); });
