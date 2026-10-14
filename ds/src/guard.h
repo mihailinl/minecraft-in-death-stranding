@@ -9,6 +9,11 @@
 namespace guard
 {
 	void install();
+	/// Removes the handler. Call it when the module that installed it is unloaded (DLL_PROCESS_DETACH): a handler
+	/// left behind points into unmapped memory, and the next exception in any thread calls it, faults, and calls it
+	/// again - forever (ReShade unloads its add-ons with every device it drops: Unreal makes and drops probe
+	/// devices before its real one).
+	void uninstall();
 	bool run_raw(void (*fn)(void *), void *arg, const char *what);
 
 	template <class F>

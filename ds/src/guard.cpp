@@ -46,6 +46,13 @@ namespace guard
 			g_handler = AddVectoredExceptionHandler(1, first_handler);
 	}
 
+	void uninstall()
+	{
+		if (g_handler != nullptr)
+			RemoveVectoredExceptionHandler(g_handler);
+		g_handler = nullptr;
+	}
+
 	__declspec(noinline) bool run_raw(void (*fn)(void *), void *arg, const char *what)
 	{
 		alignas(16) CONTEXT resume;
