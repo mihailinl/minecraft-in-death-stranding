@@ -24,18 +24,51 @@ void WsClient::stop()
 		m_thread.join();
 }
 
+bool WsClient::readable(uintptr_t s, int ms)
+{
+	for (int waited = 0; !m_stop; waited += 50)
+	{
+		if (ms >= 0 && waited >= ms)
+			return false;
+		fd_set set;
+		FD_ZERO(&set);
+		FD_SET(static_cast<SOCKET>(s), &set);
+		timeval slice = {0, 50000};
+		const int r = select(0, &set, nullptr, nullptr, &slice);
+		if (r > 0)
+			return true;
+		if (r < 0)
+			return false; // closed under us (stop), or broken
+	}
+	return false;
+}
+
 bool WsClient::open()
 {
 	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s == INVALID_SOCKET)
 		return false;
+	{
+		// published before anything can wait on it: stop() closes it
+		std::lock_guard<std::mutex> lock(m_sendLock);
+		if (m_stop)
+		{
+			closesocket(s);
+			return false;
+		}
+		m_socket = s;
+	}
+	// no receive may block past kFrameMs, no send past kSendMs (a peer that stopped reading)
+	const DWORD rcv = kFrameMs, snd = kSendMs;
+	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&rcv), sizeof(rcv));
+	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&snd), sizeof(snd));
 	sockaddr_in addr = {};
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(static_cast<u_short>(m_port));
 	inet_pton(AF_INET, m_host.c_str(), &addr.sin_addr);
 	if (connect(s, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0)
 	{
-		closesocket(s);
+		drop(s);
 		return false;
 	}
 	BOOL noDelay = TRUE;
@@ -46,27 +79,30 @@ bool WsClient::open()
 		"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
 	if (::send(s, request.data(), static_cast<int>(request.size()), 0) != static_cast<int>(request.size()))
 	{
-		closesocket(s);
+		drop(s);
 		return false;
 	}
+	// the answer, within kHandshakeMs (a peer that accepts and never answers is given up on, and retried)
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kHandshakeMs);
 	std::string response;
 	char c;
 	while (response.size() < 4096 && response.find("\r\n\r\n") == std::string::npos)
 	{
-		if (recv(s, &c, 1, 0) != 1)
+		const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+		if (left <= 0 || !readable(s, int(left)) || recv(s, &c, 1, 0) != 1)
 		{
-			closesocket(s);
+			drop(s);
 			return false;
 		}
 		response += c;
 	}
 	if (response.compare(0, 12, "HTTP/1.1 101") != 0)
 	{
-		closesocket(s);
+		drop(s);
 		return false;
 	}
-	m_socket = s;
-	return true;
+	std::lock_guard<std::mutex> lock(m_sendLock);
+	return !m_stop && m_socket == s; // stop() came during the handshake: it closed the socket
 }
 
 void WsClient::close()
@@ -80,12 +116,25 @@ void WsClient::close()
 	m_connected = false;
 }
 
-bool WsClient::recvAll(void *buffer, size_t size)
+void WsClient::drop(uintptr_t s)
+{
+	std::lock_guard<std::mutex> lock(m_sendLock);
+	if (m_socket == s)
+	{
+		closesocket(static_cast<SOCKET>(s));
+		m_socket = ~uintptr_t(0);
+	}
+	m_connected = false;
+}
+
+bool WsClient::recvAll(uintptr_t s, void *buffer, size_t size)
 {
 	char *p = static_cast<char *>(buffer);
 	while (size > 0)
 	{
-		const int n = recv(static_cast<SOCKET>(m_socket), p, static_cast<int>(size), 0);
+		if (!readable(s, kFrameMs))
+			return false;
+		const int n = recv(static_cast<SOCKET>(s), p, static_cast<int>(size), 0);
 		if (n <= 0)
 			return false;
 		p += n;
@@ -171,15 +220,27 @@ void WsClient::run()
 			}
 			else
 			{
-				std::this_thread::sleep_for(std::chrono::seconds(1));
+				for (int i = 0; i < 20 && !m_stop; ++i) // a second before trying again, stoppable
+					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				continue;
 			}
 		}
-
-		unsigned char head[2];
-		if (!recvAll(head, 2))
+		uintptr_t s;
 		{
-			close();
+			std::lock_guard<std::mutex> lock(m_sendLock);
+			s = m_socket;
+		}
+		if (s == ~uintptr_t(0))
+		{
+			m_connected = false;
+			continue;
+		}
+
+		// the next frame, waited for as long as it takes (the link is quiet between frames) - but stoppable
+		unsigned char head[2];
+		if (!readable(s, -1) || !recvAll(s, head, 2))
+		{
+			drop(s);
 			continue;
 		}
 		const int opcode = head[0] & 0x0F;
@@ -188,22 +249,23 @@ void WsClient::run()
 		if (size == 126)
 		{
 			unsigned char ext[2];
-			if (!recvAll(ext, 2)) { close(); continue; }
+			if (!recvAll(s, ext, 2)) { drop(s); continue; }
 			size = (uint64_t(ext[0]) << 8) | ext[1];
 		}
 		else if (size == 127)
 		{
 			unsigned char ext[8];
-			if (!recvAll(ext, 8)) { close(); continue; }
+			if (!recvAll(s, ext, 8)) { drop(s); continue; }
 			size = 0;
 			for (int i = 0; i < 8; ++i)
 				size = (size << 8) | ext[i];
 		}
 		unsigned char mask[4] = {};
 		const bool masked = (head[1] & 0x80) != 0;
-		if (masked && !recvAll(mask, 4)) { close(); continue; }
+		if (masked && !recvAll(s, mask, 4)) { drop(s); continue; }
 		std::string payload(static_cast<size_t>(size), '\0');
-		if (size > 0 && !recvAll(payload.data(), payload.size())) { close(); continue; }
+		if (size > (64u << 20)) { drop(s); continue; } // no text message of hers is near that: a broken stream
+		if (size > 0 && !recvAll(s, payload.data(), payload.size())) { drop(s); continue; }
 		if (masked)
 			for (size_t i = 0; i < payload.size(); ++i)
 				payload[i] ^= mask[i & 3];
@@ -223,7 +285,7 @@ void WsClient::run()
 			}
 			break;
 		case 0x8: // close
-			close();
+			drop(s);
 			break;
 		case 0x9: // ping
 			sendFrame(0xA, payload.data(), payload.size());

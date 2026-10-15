@@ -1,6 +1,8 @@
 // A minimal WebSocket client (RFC 6455 text frames) for the link to the Minecraft mod on 127.0.0.1.
 // A background thread connects (and reconnects), answers pings and queues received text messages;
-// send() may be called from any thread.
+// send() may be called from any thread. Nothing waits without a bound: the handshake (kHandshakeMs), a frame once
+// begun (kFrameMs), a send to a peer that stopped reading (kSendMs); stop() ends the thread within ~0.1 s whatever the
+// peer does (the thread waits for data in short slices and checks it is stopped).
 #pragma once
 #include <atomic>
 #include <deque>
@@ -11,6 +13,8 @@
 class WsClient
 {
 public:
+	static constexpr int kHandshakeMs = 3000, kFrameMs = 5000, kSendMs = 1000;
+
 	void start(const char *host, int port);
 	void stop();
 	bool connected() const { return m_connected; }
@@ -23,8 +27,13 @@ private:
 	void run();
 	bool open();
 	void close();
+	/// Closes `s` if it is still the client's socket (stop() may have closed it already: never twice).
+	void drop(uintptr_t s);
+	/// Waits until `s` has something to read (data, or the peer closing): false after `ms` (< 0: no limit) or once
+	/// the client is stopped.
+	bool readable(uintptr_t s, int ms);
 	bool sendFrame(int opcode, const char *data, size_t size);
-	bool recvAll(void *buffer, size_t size);
+	bool recvAll(uintptr_t s, void *buffer, size_t size);
 
 	std::string m_host;
 	int m_port = 0;
